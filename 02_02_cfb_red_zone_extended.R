@@ -19,6 +19,7 @@
 # Author: Japbir Gill, MBA MSEd
 #
 # Date Created: 2026-10-10
+# Date Revised: 2026-10-11 (shared functions moved to 00_01_cfb_functions.R)
 #
 # Copyright (c) Japbir Gill, 2026
 # Email: Japbir.Gill@gmail.com
@@ -26,15 +27,9 @@
 # Notes ----
 # https://cloud.r-project.org/web/packages/cfbfastR/refman/cfbfastR.html#cfbfastR-package
 #
-# - A red zone trip = a drive with at least one offensive snap at or inside the
-#   opponent's 20. Long TDs from outside the 20 are NOT red zone trips.
-# - Drive points come from the score change on the drive (handles missed PATs and
-#   2-pt tries). A warning fires if PATs appear to be excluded from drive scores.
-# - Drives ending at the end of a half/game and 2nd-half garbage-time drives are excluded.
-# - cfbfastR column names occasionally change between versions. check_cols()
-#   stops with a list of any missing columns so you know what to rename.
-# - The play-by-play pull is cached to disk. Set REFRESH_CACHE <- TRUE after
-#   each new week of games to re-pull the current season.
+# - Data loading, red zone definition, ridge ratings, shrinkage, and plot helpers
+#   live in 00_01_cfb_functions.R (shared with 02_01).
+# - Data loads from the weekly cache; only weeks not yet saved hit the API.
 #
 
 rm(list = ls())
@@ -43,235 +38,20 @@ rm(list = ls())
 
 setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
 source("00_00_dirs_libs_funs_vals.R")
-
-library(tidyverse)
-library(cfbfastR)
-library(glmnet)
-library(ggpath)
-library(splines)
+source("00_01_cfb_functions.R")
 
 # Settings ----
 SEASON           <- 2026
 PRIOR_SEASON     <- 2025
-MAX_WEEK         <- 15     # weeks with no data yet are skipped
+WEEKS            <- NULL         # NULL = all completed weeks; or e.g. 1:7
+REFRESH_WEEKS    <- integer(0)   # weeks to re-pull from the API, e.g. 7
 RZ_LINE          <- 20
-GARBAGE_MARGIN   <- 28     # 2nd-half drives starting with |score diff| > this are excluded
-EARLY_WEEK_MAX   <- 6      # Section 7: weeks 1..6 = "early", later weeks = "late"
-REFRESH_CACHE    <- FALSE  # TRUE re-pulls the current season (do this weekly)
-RUN_PRIOR_SEASON <- FALSE  # Section 7 pulls a full extra season of PBP (slow the first time)
-CACHE_DIR        <- file.path(DIR_INPUTS, "cache_rz")
+GARBAGE_MARGIN   <- 28           # 2nd-half drives starting with |score diff| > this are excluded
+EARLY_WEEK_MAX   <- 6            # Section 7: weeks 1..6 = "early", later weeks = "late"
+RUN_PRIOR_SEASON <- FALSE        # Section 7 pulls a full extra season of PBP (slow the first time)
 OUT_PREFIX       <- "proj_012_02_02_"
-dir.create(CACHE_DIR, showWarnings = FALSE, recursive = TRUE)
 
-# Helper Functions ----
-
-## Column checks ----
-check_cols <- function(df, cols, df_name) {
-  missing <- setdiff(cols, names(df))
-  if (length(missing) > 0) {
-    stop(df_name, " is missing columns: ", paste(missing, collapse = ", "),
-         "\nInspect names(", df_name, ") and update the column references.", call. = FALSE)
-  }
-  invisible(TRUE)
-}
-
-## Pull (and cache) a season of drives, play-by-play, and game info ----
-get_season_data <- function(season, max_week = 15, refresh = FALSE) {
-  cache_file <- file.path(CACHE_DIR, paste0("rz_raw_", season, ".rds"))
-  if (file.exists(cache_file) && !refresh) {
-    message("Loading cached data for ", season)
-    return(readRDS(cache_file))
-  }
-
-  drives <- cfbd_drives(season, season_type = "regular", division = "fbs")
-  games  <- cfbd_game_info(season, season_type = "regular")
-
-  pbp <- map(seq_len(max_week), \(wk) {
-    out <- tryCatch(
-      cfbd_pbp_data(season, season_type = "regular", week = wk, epa_wpa = TRUE),
-      error = function(e) NULL
-    )
-    if (!is.null(out) && nrow(out) > 0) message("Season ", season, " week ", wk, ": ", nrow(out), " plays")
-    out
-  }) |>
-    compact() |>
-    bind_rows()
-
-  out <- list(drives = drives, pbp = pbp, games = games)
-  saveRDS(out, cache_file)
-  out
-}
-
-## Build the red zone tables for one season ----
-build_rz_tables <- function(raw) {
-  drives_raw <- raw$drives
-  if (!"is_home_offense" %in% names(drives_raw)) drives_raw$is_home_offense <- NA
-
-  check_cols(drives_raw, c("drive_id", "game_id", "offense", "defense", "drive_result", "start_period",
-                           "start_offense_score", "start_defense_score", "end_offense_score",
-                           "end_defense_score", "end_yards_to_goal"), "drives")
-  check_cols(raw$pbp, c("drive_id", "game_id", "id_play", "pos_team", "def_pos_team", "period", "down",
-                        "distance", "yards_to_goal", "yards_gained", "play_type", "rush", "pass",
-                        "EPA", "success", "ep_before"), "pbp")
-  check_cols(raw$games, c("game_id", "week", "neutral_site", "home_team", "away_team",
-                          "home_points", "away_points"), "games")
-
-  games <- raw$games |>
-    mutate(game_id = as.character(game_id))
-
-  ### Drives ----
-  drives <- drives_raw |>
-    mutate(drive_id = as.character(drive_id), game_id = as.character(game_id)) |>
-    select(-any_of(c("week", "neutral_site"))) |>
-    left_join(games |> select(game_id, week, neutral_site), by = "game_id") |>
-    mutate(
-      # actual points scored by the offense on the drive
-      drive_points      = end_offense_score - start_offense_score,
-      # points scored by the defense on the drive (pick-six, fumble return, safety)
-      def_return_points = end_defense_score - start_defense_score,
-      score_diff_start  = start_offense_score - start_defense_score,
-      # home indicator for the ridge models: +1 home, -1 away, 0 neutral
-      home = case_when(
-        neutral_site %in% TRUE    ~ 0,
-        is_home_offense %in% TRUE ~ 1,
-        TRUE                      ~ -1
-      ),
-      # outcome flags from points, which avoids relying on drive_result labels
-      flag_td    = as.integer(drive_points >= 6),
-      flag_fg    = as.integer(drive_points == 3),
-      flag_score = as.integer(drive_points >= 3),
-      # exclusions
-      flag_end_period = str_detect(drive_result, regex("END OF", ignore_case = TRUE)) %in% TRUE,
-      flag_garbage    = (start_period >= 3 & abs(score_diff_start) > GARBAGE_MARGIN) %in% TRUE,
-      flag_bad_score  = !(drive_points %in% c(0, 3, 6, 7, 8)),
-      analysis_drive  = !flag_end_period & !flag_garbage & !flag_bad_score,
-      # red zone outcome category
-      rz_outcome = case_when(
-        flag_td == 1 ~ "Touchdown",
-        flag_fg == 1 ~ "Field Goal",
-        str_detect(drive_result, regex("MISSED FG|BLOCKED FG|FG MISSED", ignore_case = TRUE)) ~ "Missed/Blocked FG",
-        str_detect(drive_result, regex("INT|FUMBLE", ignore_case = TRUE)) ~ "Turnover",
-        str_detect(drive_result, regex("DOWNS", ignore_case = TRUE)) ~ "Turnover on Downs",
-        TRUE ~ "Other"
-      )
-    )
-
-  message(sprintf("Drives with unusual point values (excluded): %d", sum(drives$flag_bad_score)))
-  td_pts <- drives$drive_points[drives$flag_td == 1 & !is.na(drives$drive_points)]
-  if (length(td_pts) > 0 && mean(td_pts == 6) > 0.9) {
-    warning("Over 90% of TD drives show 6 points: PATs appear to be excluded from drive scores. ",
-            "drive_points will understate TD value by ~1; consider using drive_points + flag_td.", call. = FALSE)
-  }
-
-  ### Play-by-play ----
-  non_scrimmage <- regex(
-    "kickoff|timeout|coin toss|end (of )?(period|half|game|regulation)|^penalty$|extra point|two point|uncategorized|placeholder",
-    ignore_case = TRUE
-  )
-
-  pbp <- raw$pbp |>
-    mutate(
-      drive_id     = as.character(drive_id),
-      game_id      = as.character(game_id),
-      is_scrimmage = !str_detect(coalesce(play_type, "uncategorized"), non_scrimmage),
-      is_rush_pass = coalesce(rush == 1 | pass == 1, FALSE)
-    ) |>
-    left_join(drives |> select(drive_id, analysis_drive), by = "drive_id")
-
-  # play order within a game: prefer game_play_number; else id_play as a zero-padded string
-  # (id_play is too long to sort reliably as a double)
-  pbp$play_order <- if ("game_play_number" %in% names(pbp)) {
-    as.numeric(pbp$game_play_number)
-  } else {
-    str_pad(format(pbp$id_play, scientific = FALSE, trim = TRUE), 25, pad = "0")
-  }
-
-  match_rate <- mean(unique(pbp$drive_id) %in% drives$drive_id)
-  message(sprintf("PBP drive_id match rate to drives table: %.1f%%", 100 * match_rate))
-  if (match_rate < 0.9) {
-    warning("Low drive_id match rate: check that drive_id formats agree between ",
-            "cfbd_drives() and cfbd_pbp_data().", call. = FALSE)
-  }
-
-  ### Red zone trips: drives with at least one scrimmage snap inside the 20 ----
-  rz_trips <- pbp |>
-    filter(is_scrimmage, yards_to_goal <= RZ_LINE, !is.na(drive_id)) |>
-    arrange(game_id, play_order) |>
-    summarise(
-      rz_entry_ytg  = first(yards_to_goal),   # where the trip entered the red zone
-      rz_entry_down = first(down),
-      rz_entry_dist = first(distance),
-      rz_entry_ep   = first(ep_before),       # CFBD expected points at the first RZ snap
-      rz_snaps      = n(),
-      .by = drive_id
-    )
-
-  prod_rz_drives <- drives |>
-    inner_join(rz_trips, by = "drive_id") |>
-    filter(analysis_drive) |>
-    mutate(
-      rz_entry_down = coalesce(pmin(rz_entry_down, 4), 1),
-      rz_entry_zone = cut(rz_entry_ytg, c(0, 5, 10, 20), labels = c("1-5", "6-10", "11-20"))
-    )
-
-  drives_clean <- drives |>
-    filter(analysis_drive) |>
-    mutate(rz_trip = drive_id %in% rz_trips$drive_id)
-
-  list(games = games, drives = drives, drives_clean = drives_clean, pbp = pbp,
-       rz_trips = rz_trips, prod_rz_drives = prod_rz_drives)
-}
-
-## Expected points by red zone entry spot, and points over expected ----
-add_poe <- function(rz_df) {
-  xp_model <- lm(drive_points ~ ns(rz_entry_ytg, df = 3) + factor(rz_entry_down), data = rz_df)
-  out <- rz_df |>
-    mutate(
-      xpts        = predict(xp_model, newdata = rz_df),
-      poe         = drive_points - xpts,
-      # alternative using CFBD's EP model. Note: CFBD EP is "next score" EP, which
-      # also prices in the opponent scoring next, so it is not strictly points-this-drive.
-      poe_cfbd_ep = drive_points - rz_entry_ep
-    )
-  attr(out, "xp_model") <- xp_model
-  out
-}
-
-## Opponent-adjusted team ratings via ridge regression ----
-# Full dummies for every offense AND defense (no dropped reference level) plus a
-# home term. Ridge handles the collinearity. Ratings are at a neutral site vs an
-# average opponent.
-fit_team_ridge <- function(df, y_col, family = c("gaussian", "binomial")) {
-  family <- match.arg(family)
-  df <- df |> filter(!is.na(.data[[y_col]]))
-
-  teams <- sort(unique(c(df$offense, df$defense)))
-  off <- factor(df$offense, levels = teams)
-  def <- factor(df$defense, levels = teams)
-  X_off <- model.matrix(~ 0 + off); colnames(X_off) <- paste0("off::", teams)
-  X_def <- model.matrix(~ 0 + def); colnames(X_def) <- paste0("def::", teams)
-  X <- cbind(X_off, X_def, home = df$home)
-
-  fit <- cv.glmnet(X, df[[y_col]], family = family, alpha = 0, standardize = FALSE)
-  cf  <- coef(fit, s = "lambda.min")
-  cf  <- tibble(term = rownames(cf), coef = as.numeric(cf))
-
-  intercept <- cf$coef[cf$term == "(Intercept)"]
-  link_inv  <- if (family == "binomial") plogis else identity
-
-  off_tbl <- cf |>
-    filter(str_starts(term, "off::")) |>
-    transmute(team = str_remove(term, "^off::"), off_coef = coef)
-  def_tbl <- cf |>
-    filter(str_starts(term, "def::")) |>
-    transmute(team = str_remove(term, "^def::"), def_coef = coef)
-
-  full_join(off_tbl, def_tbl, by = "team") |>
-    mutate(
-      adj_off = link_inv(intercept + off_coef),
-      adj_def = link_inv(intercept + def_coef)
-    )
-}
+# Script-Specific Helpers ----
 
 ## Split-half reliability with Spearman-Brown correction ----
 # Randomly splits each team's observations in half, correlates the half means
@@ -284,7 +64,7 @@ split_half_reliability <- function(df, team_col, value_col, side_label,
     rename(team = all_of(team_col)) |>
     filter(!is.na(.data[[value_col]])) |>
     select(team, value = all_of(value_col))
-
+  
   r <- map_dbl(seq_len(n_iter), \(i) {
     halves <- base |>
       mutate(half = sample(rep(c("h1", "h2"), length.out = n())), .by = team) |>
@@ -293,22 +73,12 @@ split_half_reliability <- function(df, team_col, value_col, side_label,
       filter(n_h1 >= min_per_half, n_h2 >= min_per_half)
     cor(halves$v_h1, halves$v_h2)
   })
-
+  
   r_half <- mean(r, na.rm = TRUE)
   tibble(
     side = side_label, metric = value_col, teams = n_distinct(base$team),
     split_half_r = r_half, reliability_full = 2 * r_half / (1 + r_half)
   )
-}
-
-## Empirical Bayes (beta-binomial) shrinkage of a rate ----
-eb_shrink <- function(x, n) {
-  p      <- x / n
-  m      <- weighted.mean(p, n)
-  v_obs  <- sum(n * (p - m)^2) / sum(n)
-  v_true <- max(v_obs - m * (1 - m) * mean(1 / n), 1e-6)   # remove binomial noise
-  k      <- m * (1 - m) / v_true - 1                         # prior "sample size"
-  (x + k * m) / (n + k)
 }
 
 ## Points-per-drive decomposition vs. league average ----
@@ -323,7 +93,7 @@ decompose_ppd <- function(drives_clean, side = c("offense", "defense")) {
       lg_nonrz  = mean(drive_points[!rz_trip]),
       lg_ppd    = mean(drive_points)
     )
-
+  
   drives_clean |>
     rename(team = all_of(side)) |>
     summarise(
@@ -342,60 +112,9 @@ decompose_ppd <- function(drives_clean, side = c("offense", "defense")) {
     )
 }
 
-## Plot helpers ----
-team_info <- cfbd_team_info() |> select(school, logo, conference)
-
-add_team_info <- function(df) {
-  df |>
-    left_join(team_info, by = join_by(team == school)) |>
-    filter(!is.na(conference))
-}
-
-rng_pos <- function(v, p) {
-  r <- range(v, na.rm = TRUE)
-  r[1] + p * diff(r)
-}
-
-add_watermark <- function(x, y, width = 0.02) {
-  geom_from_path(data = watermark_path, aes(x = !!x, y = !!y, path = image_path),
-                 width = width, alpha = 0.8, inherit.aes = FALSE)
-}
-
-theme_rz <- function(base_size = 12) {
-  theme_minimal(base_size = base_size) +
-    theme(
-      panel.grid.minor = element_blank(),
-      plot.title    = element_text(size = 20, face = "bold", hjust = 0.5),
-      plot.subtitle = element_text(size = 14, face = "italic", hjust = 0.5),
-      plot.caption  = element_text(hjust = 0)
-    )
-}
-
-plot_logo_quadrant <- function(df, x, y, title, subtitle, x_lab, y_lab,
-                               caption = "Data: cfbfastR, ggplot2, ggpath",
-                               reverse_y = TRUE, pct = FALSE) {
-  lab_fun <- if (pct) scales::percent_format(accuracy = 1) else waiver()
-  df <- df |> filter(!is.na(.data[[x]]), !is.na(.data[[y]]))
-  ggplot(df, aes(x = .data[[x]], y = .data[[y]])) +
-    geom_vline(xintercept = mean(df[[x]]), linetype = "dashed", color = "gray60") +
-    geom_hline(yintercept = mean(df[[y]]), linetype = "dashed", color = "gray60") +
-    geom_from_path(aes(path = logo), width = 0.025) +
-    add_watermark(rng_pos(df[[x]], 0.98), rng_pos(df[[y]], 0.98)) +
-    scale_x_continuous(labels = lab_fun) +
-    (if (reverse_y) scale_y_reverse(labels = lab_fun) else scale_y_continuous(labels = lab_fun)) +
-    labs(title = title, subtitle = subtitle, x = x_lab, y = y_lab, caption = caption) +
-    theme_rz()
-}
-
-save_plot <- function(p, name, width = 11.5, height = 7) {
-  print(p)
-  ggsave(plot = p, path = DIR_OUTPUTS, filename = paste0(OUT_PREFIX, name, ".png"),
-         width = width, height = height)
-}
-
 # Datasets ----
-raw_current <- get_season_data(SEASON, MAX_WEEK, refresh = REFRESH_CACHE)
-rz <- build_rz_tables(raw_current)
+raw_current <- load_cfb_season(SEASON, WEEKS, overwrite_weeks = REFRESH_WEEKS)
+rz <- build_rz_tables(raw_current, rz_line = RZ_LINE, garbage_margin = GARBAGE_MARGIN)
 rz$prod_rz_drives <- add_poe(rz$prod_rz_drives)
 xp_model <- attr(rz$prod_rz_drives, "xp_model")
 
@@ -727,7 +446,7 @@ calc_fourth_ev <- function(df) {
   df$p_fg   <- predict(fg_model, newdata = df, type = "response")
   df$p_conv <- predict(conv_model, newdata = df, type = "response")
   ep_after_kickoff <- ep_fun(75)   # opponent's EP after a kickoff touchback at their 25
-
+  
   df |>
     mutate(
       # made FG: +3, then opponent receives; missed FG: opponent ball at spot of kick or their 20
@@ -905,38 +624,38 @@ save_plot(p, "scatter_negative_plays_vs_td_rate")
 # EPA/play when predicting later scoring margin?
 
 if (RUN_PRIOR_SEASON) {
-
-  raw_prior <- get_season_data(PRIOR_SEASON, MAX_WEEK, refresh = FALSE)
-  rzp <- build_rz_tables(raw_prior)
+  
+  raw_prior <- load_cfb_season(PRIOR_SEASON)
+  rzp <- build_rz_tables(raw_prior, rz_line = RZ_LINE, garbage_margin = GARBAGE_MARGIN)
   rzp$prod_rz_drives <- add_poe(rzp$prod_rz_drives)
-
+  
   period_label <- function(week) if_else(week <= EARLY_WEEK_MAX, "early", "late")
-
+  
   ## Team metrics by period ----
   rz_off_period <- rzp$prod_rz_drives |>
     mutate(period = period_label(week)) |>
     summarise(rz_td_rate = mean(flag_td), rz_pts_per_trip = mean(drive_points), rz_poe = mean(poe),
               .by = c(offense, period)) |>
     rename(team = offense)
-
+  
   rz_def_period <- rzp$prod_rz_drives |>
     mutate(period = period_label(week)) |>
     summarise(def_rz_td_rate = mean(flag_td), def_rz_poe = mean(poe), .by = c(defense, period)) |>
     rename(team = defense)
-
+  
   plays_period <- rzp$pbp |>
     filter(is_scrimmage, analysis_drive %in% TRUE, is_rush_pass, !is.na(EPA)) |>
     select(-any_of("week")) |>
     left_join(rzp$games |> select(game_id, week), by = "game_id") |>
     mutate(period = period_label(week))
-
+  
   epa_off_period <- plays_period |>
     summarise(off_epa = mean(EPA), .by = c(pos_team, period)) |>
     rename(team = pos_team)
   epa_def_period <- plays_period |>
     summarise(def_epa = mean(EPA), .by = c(def_pos_team, period)) |>
     rename(team = def_pos_team)
-
+  
   margin_period <- rzp$games |>
     filter(!is.na(home_points), !is.na(away_points)) |>
     transmute(week, home_team, away_team, margin = home_points - away_points) |>
@@ -946,12 +665,12 @@ if (RUN_PRIOR_SEASON) {
       period = period_label(week)
     ) |>
     summarise(avg_margin = mean(margin), .by = c(team, period))
-
+  
   team_period <- list(rz_off_period, rz_def_period, epa_off_period, epa_def_period, margin_period) |>
     reduce(full_join, by = c("team", "period")) |>
     semi_join(team_info, by = join_by(team == school)) |>
     pivot_wider(names_from = period, values_from = -c(team, period), names_glue = "{.value}_{period}")
-
+  
   ## Early-to-late stability ----
   stability <- tibble(metric = c("rz_td_rate", "rz_pts_per_trip", "rz_poe", "def_rz_td_rate",
                                  "def_rz_poe", "off_epa", "def_epa")) |>
@@ -959,7 +678,7 @@ if (RUN_PRIOR_SEASON) {
                                                    team_period[[paste0(m, "_late")]],
                                                    use = "complete.obs")))
   print(stability)
-
+  
   p <- ggplot(stability, aes(x = early_late_r, y = fct_reorder(metric, early_late_r))) +
     geom_col(fill = "#336699", alpha = 0.75, width = 0.7) +
     geom_text(aes(label = sprintf("%.2f", early_late_r)), hjust = -0.15, size = 3.5) +
@@ -972,15 +691,15 @@ if (RUN_PRIOR_SEASON) {
     ) +
     theme_rz()
   save_plot(p, "bar_prior_season_stability")
-
+  
   ## Does early RZ performance predict later margin beyond EPA? ----
   pred_df <- team_period |>
     filter(!is.na(avg_margin_late), !is.na(off_epa_early), !is.na(def_epa_early),
            !is.na(rz_poe_early), !is.na(def_rz_poe_early))
-
+  
   m_base <- lm(avg_margin_late ~ off_epa_early + def_epa_early, data = pred_df)
   m_rz   <- update(m_base, . ~ . + rz_poe_early + def_rz_poe_early)
-
+  
   message(sprintf("Adj. R-squared, EPA only: %.3f | EPA + red zone POE: %.3f",
                   summary(m_base)$adj.r.squared, summary(m_rz)$adj.r.squared))
   print(summary(m_rz))
