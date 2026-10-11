@@ -27,23 +27,54 @@ source("00_00_dirs_libs_funs_vals.R")
 
 # Formatting and Global Options ----
 
-# Datasets ----
+# Raw Datasets ----
 
 ## Game Drives ----
-raw_game_drives <- cfbd_drives(2026, season_type = "regular", division = "fbs")
+raw_game_drives <- 
+  read.csv(
+    file.path(DIR_INPUTS, "proj_012_01_01_cfb_redzone_raw_game_drives.csv"),
+    header = TRUE
+    )
 
-## Team information ----
-raw_team_info <- cfbd_team_info()
+## Play by Play ----
+raw_play_by_play <-  
+  read.csv(
+    file.path(DIR_INPUTS, "proj_012_01_01_cfb_redzone_raw_play_by_play.csv"),
+    header = TRUE
+  )
+  
+## Team Information ----
+raw_team_info <- 
+  read.csv(
+    file.path(DIR_INPUTS, "proj_012_01_01_cfb_redzone_raw_team_info.csv"),
+    header = TRUE
+  )
 
+# Prepared Datasets ----
 
-# Processing ----
+## Play by Play ----
+prod_play_by_play <- 
+  raw_play_by_play |> 
+  filter(
+    yards_to_goal <= 20,
+    !play_type %in% c("Kickoff", "Kickoff Return (Offense)", "Timeout", "Punt Return", 
+                      "End Period", "End of Half", "End of Game")
+  ) |>
+  group_by(drive_id) |>
+  summarise(
+    first_rz_ytg = max(yards_to_goal),     # entry point into the red zone
+    rz_ep_entry  = first(ep_before),       # EP at first RZ snap (for points-over-expected)
+    # .by = drive_id,
+    .groups = "drop"
+  ) 
 
 ## Game Drives ----
 prod_game_drives <- 
   # start with game drives
   raw_game_drives |> 
   # filter for those that made the red zone
-  filter(end_yards_to_goal <= 20) |>
+  # filter(end_yards_to_goal <= 20) |> 
+  inner_join(prod_play_by_play, by = join_by(drive_id)) |> 
   # create fields
   mutate(
     # is a red zone drive 
@@ -52,7 +83,7 @@ prod_game_drives <-
     game_type = ifelse(offense_conference == defense_conference, "In-Conference", "Out of Conference"),
     # points scored on drive
     drive_points = case_when(
-      drive_result %in% c("TD") ~ 7,
+      drive_result %in% c("TD") ~ 6,
       drive_result %in% c("FG") ~ 3,
       # drive_result %in% c("FUMBLE RETURN TD", "FUMBLE TD", "INT TD", "MISSED FG TD") ~ -7,
       TRUE ~ 0
@@ -67,7 +98,9 @@ prod_game_drives <-
 coef_rating_points <- 
   coef(
     cv.glmnet(
-      model.matrix(~offense + defense - 1, data = prod_game_drives),
+      model.matrix(~ offense + defense, data = prod_game_drives,
+                   contrasts.arg = list(offense = contrasts(factor(prod_game_drives$offense), contrasts = FALSE),
+                                        defense = contrasts(factor(prod_game_drives$defense), contrasts = FALSE)))[, -1],
       prod_game_drives$drive_points, 
       family = "gaussian", alpha = 0
     ), 
@@ -99,9 +132,11 @@ def_ratings_points <- team_ratings_points_df |>
 coef_ratings_tds <- 
   coef(
     cv.glmnet(
-      model.matrix(~offense + defense - 1, data = prod_game_drives),
+      model.matrix(~ offense + defense, data = prod_game_drives,
+                   contrasts.arg = list(offense = contrasts(factor(prod_game_drives$offense), contrasts = FALSE),
+                                        defense = contrasts(factor(prod_game_drives$defense), contrasts = FALSE)))[, -1],
       prod_game_drives$flag_td,
-      family= "binomial", alpha = 0
+      family= "binomial", alpha = 0, standardize = FALSE
       ),
     s = "lambda.min"
     )
@@ -135,7 +170,8 @@ print(
       total_points = sum(drive_points),
       avg_points = mean(drive_points, na.rm = TRUE),
       .by = offense) |> 
-    arrange(desc(avg_points)),
+    arrange(desc(avg_points)) |> 
+    as.tibble(),
   n = 50
 )
 
@@ -147,10 +183,10 @@ print(
       total_points = sum(drive_points),
       avg_points = mean(drive_points, na.rm = TRUE),
       .by = defense) |> 
-    arrange(avg_points),
+    arrange(avg_points) |> 
+    as.tibble(),
   n = 50
 )
-
 
 # Red Zone Plots ----
 # Plot 1: Average Points Scored ----
@@ -194,7 +230,7 @@ plot_01_data <-
 
 plot_01_mean_offense <- mean(plot_01_data$average_points_offense)
 plot_01_mean_defense <- mean(plot_01_data$average_points_defense)
-placement_factors <- c(0.6, 1.40)
+# placement_factors <- c(0.6, 1.40)
 
 plot_01_mean_offense_adj = mean(plot_01_data$adj_off_points)
 plot_01_mean_defense_adj = mean(plot_01_data$adj_def_points)
@@ -272,7 +308,7 @@ ggplot(plot_01_data, aes(x = adj_off_points, y = adj_def_points)) +
   geom_from_path(aes(path = logo), width = 0.025) +
   # add watermark
   geom_from_path(data = watermark_path, 
-                 aes(x = max(plot_01_data$adj_off_points)*0.90, 
+                 aes(x = max(plot_01_data$adj_off_points)*0.99, 
                      y = max(plot_01_data$adj_def_points)*0.99, 
                      path = image_path), width = 0.02, alpha = 0.80, inherit.aes = FALSE) +
   # quadrant labels 
@@ -339,7 +375,7 @@ ggplot(plot_01_data, aes(x = reorder(team, net_team_points_centralized), y = net
   # labels
   labs(title = "Mean-Centered Average Net Red Zone Points, by Team", 
        subtitle = "For Teams in FBS, 2026 Season To Date",
-       caption = "cfbfastR, ggplot2, ggpath\nCalculated as a team's net red zone points (Offensive Points Scored − Defensive Points Allowed) minus the Power 5 conference average") +
+       caption = "cfbfastR, ggplot2, ggpath\nCalculated as a team's net red zone points (Offensive Points Scored − Defensive Points Allowed) minus the FBS average") +
   ylab("Mean-Centered Average Net Team Points") +
   # formatting and other
   theme_minimal() +
@@ -377,7 +413,7 @@ ggplot(plot_01_data, aes(x = reorder(team, net_team_points_adj_centralized), y =
   # labels
   labs(title = "Mean-Centered Average Net Red Zone Points, by Team", 
        subtitle = "For Teams in FBS, 2026 Season To Date, Adjusted for Schedule Strength",
-       caption = "cfbfastR, ggplot2, ggpath\nCalculated as a team's net red zone points (Offensive Points Scored − Defensive Points Allowed) minus the Power 5 conference average\nRidge regression (L2 regularization) fit on 2026 red zone drives. Values represent expected points per drive against an average opponent.") +
+       caption = "cfbfastR, ggplot2, ggpath\nCalculated as a team's net red zone points (Offensive Points Scored − Defensive Points Allowed) minus the FBS average\nRidge regression (L2 regularization) fit on 2026 red zone drives. Values represent expected points per drive against an average opponent.") +
   ylab("Adjusted Mean-Centered Average Net Team Points") +
   # formatting and other
   theme_minimal() +
@@ -549,11 +585,11 @@ ggplot(plot_02_data, aes(x = adj_off_td_pct, y = adj_def_td_pct)) +
            y = label_pos$y[label_pos$quadrant == "Bottom-Left"], 
            label = "Struggling\nRed Zone Teams", fontface = "bold", color = "firebrick", alpha = 0.6, size = 3) +
   labs(
-    title = "Power 5 Red Zone Efficiency Matrix",
-    subtitle = "Offensive RZ Touchdown % Scored vs. Defensive RZ Touchdown % Allowed, Adjusted For Schedule Strength",
-    x = "Offensive RZ Touchdown Rate Scored",
-    y = "Defensive RZ Touchdown Rate Allowed (Inverted)",
-    caption = "Data: cfbfastR, ggplot2, ggpath\nRidge regression (L2 regularization) fit on 2026 red zone drives. Values represent expected points per drive against an average opponent."
+    title = "FBS Red Zone Efficiency Matrix",
+    subtitle = "Offensive Red Zone Touchdown % Scored vs. Defensive Red Zone Touchdown % Allowed,\nAdjusted For Schedule Strength",
+    x = "Offensive Red Zone Touchdown Rate Scored",
+    y = "Defensive Red Zone Touchdown Rate Allowed (Inverted)",
+    caption = "Data: cfbfastR, ggplot2, ggpath\nRidge regression (L2 regularization) fit on 2026 red zone drives. Values represent touchdown probability per drive against an average opponent."
   ) +
   theme_minimal(base_size = 12) +
   theme(
@@ -567,7 +603,7 @@ ggsave(plot = get_last_plot(), path = DIR_OUTPUTS, filename = "proj_012_02_01_sc
 
 ## Settling for 3 vs Going For 7 ----
 plot_02_data |>
-  # Top 25 teams by RZ scoring rate
+  # Top N teams by RZ scoring rate
   slice_max(pct_scoring_drives_offense, n = 40) |>
   mutate(team = reorder(team, pct_scoring_drives_offense)) |>
   ggplot() +
@@ -669,7 +705,7 @@ plot_02_data |>
                  aes(x = 0.95, y = 0.76, path = image_path), width = 0.02, alpha = 0.80, inherit.aes = FALSE) +
   # labels
   labs(
-    title = "Red Zone Drive Outcome Distribution For The Top 40 Scoring Teams",
+    title = "Red Zone Drive Outcome Distribution\nFor The Top 40 Scoring Teams",
     x = "Proportion of Red Zone Drives",
     y = NULL,
     fill = "Drive Result",
@@ -690,7 +726,8 @@ ggsave(plot = get_last_plot(), path = DIR_OUTPUTS, filename = "proj_012_02_01_co
 
 ## Net Red Zone Ratio Lollipop Chart ----
 plot_02_data |>
-  filter(!is.na(ratio_td_drives)) |>
+  # filter for teams that have a ratio (excluding missing and infinite values)
+  filter(is.finite(ratio_td_drives)) |>
   # slice_max(ratio_td_drives, n = 15) |>
   ggplot(aes(x = ratio_td_drives, y = reorder(team, ratio_td_drives))) +
   # lollipops
@@ -706,9 +743,9 @@ plot_02_data |>
                      path = image_path), width = 0.02, alpha = 0.80, inherit.aes = FALSE) +
   # labels
   labs(
-    title = "Top Power 5 Net Red Zone Touchdown Ratios",
-    subtitle = "Ratio of Offensive Red Zone TDs Scored to Defensive Red Zone TDs Allowed\n(Baseline = 1.0)",
-    x = "Offensive Red Zone TDs / Defensive Red Zone TDs Allowed",
+    title = "Top FBS Net Red Zone Touchdown Ratios",
+    subtitle = "Ratio of Offensive Red Zone TDs Scored\nto Defensive Red Zone TDs Allowed\n(Baseline = 1.0)",
+    x = "Offensive Red Zone TDs Scored / Defensive Red Zone TDs Allowed",
     y = NULL,
     caption = "Data: cfbfastR, ggplot2, ggpath"
   ) +
@@ -722,3 +759,4 @@ plot_02_data |>
   )
 ggsave(plot = get_last_plot(), path = DIR_OUTPUTS, filename = "proj_012_02_01_lollipop_redzone_ratio.png", 
        width = 14, height = 20)
+
