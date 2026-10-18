@@ -218,11 +218,13 @@ save_plot(p, "scatter_offense_defense_td_pct")
 p <- plot_logo_quadrant(
   team_rz, "adj_off_td_pct", "adj_def_td_pct",
   title    = "FBS Red Zone Efficiency Matrix",
-  subtitle = "Offensive RZ Touchdown % Scored vs. Defensive RZ Touchdown % Allowed, Adjusted for Schedule Strength",
+  subtitle = str_wrap("Offensive RZ Touchdown % Scored vs. Defensive RZ Touchdown % Allowed, Adjusted for Schedule Strength", 80),
   x_lab    = "Adjusted Offensive RZ Touchdown Rate Scored",
   y_lab    = "Adjusted Defensive RZ Touchdown Rate Allowed (Inverted)",
-  caption  = paste(CAP_DATA, CAP_RZ,
-                   paste(CAP_RIDGE, "Values are the probability a red zone trip ends in a touchdown."), sep = "\n"),
+  caption  = str_wrap(
+    paste(CAP_DATA, CAP_RZ,
+          paste(CAP_RIDGE, "Values are the probability a red zone trip ends in a touchdown."), sep = "\n"),
+    130),
   pct = TRUE, quadrant_labels = LABELS_ELITE, label_alpha = 0.6
 )
 save_plot(p, "scatter_offense_defense_td_pct_adj")
@@ -284,9 +286,9 @@ p <- ggplot(plot_outcomes, aes(x = pct, y = team, fill = outcome)) +
   scale_x_continuous(labels = scales::percent_format()) +
   scale_fill_manual(values = c("Touchdown" = "#2e7d32", "Field Goal" = "#fbc02d", "No Points" = "#c62828")) +
   labs(
-    title = "Red Zone Drive Outcome Distribution For The Top 40 Scoring Teams",
+    title = str_wrap("Red Zone Drive Outcome Distribution For The Top 40 Scoring Teams", 35),
     x = "Proportion of Red Zone Drives", y = NULL, fill = NULL,
-    caption = paste(CAP_DATA, CAP_RZ, sep = "\n")
+    caption = str_wrap(paste(CAP_DATA, CAP_RZ, sep = "\n"), 80)
   ) +
   theme_rz() +
   theme(legend.position = "top")
