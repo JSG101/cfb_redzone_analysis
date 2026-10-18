@@ -331,8 +331,8 @@ rz_plays <- rz$pbp |>
   filter(is_scrimmage, yards_to_goal <= RZ_LINE, is_rush_pass, !is.na(EPA)) |>
   semi_join(rz$prod_rz_drives, by = "drive_id") |>
   mutate(
-    zone       = cut(yards_to_goal, c(0, 5, 10, 20, Inf),
-                     labels = c("Goal Line (1-5)", "Tight (6-10)", "Fringe (11-20)", "Outside RZ (>20)")),
+    zone       = cut(yards_to_goal, c(0, 5, 10, 20),
+                     labels = c("Goal Line (1-5)", "Tight (6-10)", "Fringe (11-20)")),
     goal_to_go = distance >= yards_to_goal,
     play_call  = if_else(coalesce(pass == 1, FALSE), "Pass", "Rush")
   )
@@ -340,8 +340,7 @@ rz_plays <- rz$pbp |>
 ## League context: EPA by zone and play type ----
 rz_league <- rz_plays |>
   summarise(plays = n(), epa = mean(EPA), success_rate = mean(success, na.rm = TRUE),
-            .by = c(zone, play_call)) |> 
-  mutate(zone = fct_na_value_to_level(zone, "Outside RZ (>20)"))
+            .by = c(zone, play_call))
 print(rz_league)
 
 p <- ggplot(rz_league, aes(x = zone, y = epa, fill = play_call)) +
@@ -357,10 +356,7 @@ p <- ggplot(rz_league, aes(x = zone, y = epa, fill = play_call)) +
     caption = "Data: cfbfastR, ggplot2"
   ) +
   theme_rz() +
-  theme(legend.position = "top") +
-  scale_y_continuous(
-    expand = expansion(mult = c(0.15, 0.15)) 
-  )
+  theme(legend.position = "top")
 save_plot(p, "bar_league_epa_by_zone")
 
 ## Team play-level summary ----
@@ -709,3 +705,56 @@ if (RUN_PRIOR_SEASON) {
   print(summary(m_rz))
   print(anova(m_base, m_rz))
 }
+
+# Save Results for the Report ----
+# Read by 03_01_cfb_red_zone_report.Rmd so the manuscript's numbers match these outputs.
+fbs_teams <- team_info$school
+saveRDS(
+  list(
+    season = SEASON,
+    weeks  = sort(unique(rz$drives$week)),
+    rz_line = RZ_LINE,
+    garbage_margin = GARBAGE_MARGIN,
+    sample = tibble(
+      drives_total     = nrow(rz$drives),
+      drives_analysis  = sum(rz$drives$analysis_drive),
+      excl_end_period  = sum(rz$drives$flag_end_period),
+      excl_garbage     = sum(rz$drives$flag_garbage & !rz$drives$flag_end_period),
+      excl_bad_score   = sum(rz$drives$flag_bad_score & !rz$drives$flag_end_period & !rz$drives$flag_garbage),
+      rz_trips         = nrow(rz$prod_rz_drives),
+      rz_plays         = nrow(rz_plays),
+      games            = n_distinct(rz$drives$game_id),
+      fbs_teams        = n_distinct(intersect(c(rz$drives$offense, rz$drives$defense), fbs_teams))
+    ),
+    definition_check = definition_check,
+    td_source        = td_source,
+    xp_model_r2      = summary(xp_model)$r.squared,
+    xp_curve         = xp_curve,
+    plot_poe         = plot_poe,
+    lambda_poe       = attr(poe_adj, "lambda"),
+    reliability      = reliability,
+    td_shrunk        = td_shrunk,
+    decomp_off       = decomp_off,
+    decomp_def       = decomp_def,
+    rz_league        = rz_league,
+    rz_play_team     = rz_play_team,
+    fg_model_coef    = coef(fg_model),
+    conv_model_coef  = coef(conv_model),
+    decision_grid    = decision_grid,
+    fourth_summary   = tibble(
+      n            = nrow(fourth_downs),
+      go_rate      = mean(fourth_downs$decision == "Go"),
+      model_go     = mean(fourth_downs$model_call == "Go"),
+      agreement    = mean(fourth_downs$agrees),
+      ev_lost      = sum(fourth_downs$ev_lost)
+    ),
+    fourth_team      = fourth_team,
+    rz_outcomes      = count(rz$prod_rz_drives, rz_outcome) |> mutate(pct = n / sum(n)),
+    rz_negative      = rz_negative,
+    neg_td_cor       = cor.test(rz_negative$negative_play_rate, rz_negative$td_rate),
+    prior_season     = if (RUN_PRIOR_SEASON) list(stability = stability, adj_r2_base = summary(m_base)$adj.r.squared,
+                                                  adj_r2_rz = summary(m_rz)$adj.r.squared,
+                                                  anova_p = anova(m_base, m_rz)$`Pr(>F)`[2]) else NULL
+  ),
+  file.path(DIR_OUTPUTS, paste0(OUT_PREFIX, "results.rds"))
+)
