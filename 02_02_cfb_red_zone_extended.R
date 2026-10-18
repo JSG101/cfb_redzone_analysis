@@ -331,8 +331,8 @@ rz_plays <- rz$pbp |>
   filter(is_scrimmage, yards_to_goal <= RZ_LINE, is_rush_pass, !is.na(EPA)) |>
   semi_join(rz$prod_rz_drives, by = "drive_id") |>
   mutate(
-    zone       = cut(yards_to_goal, c(0, 5, 10, 20),
-                     labels = c("Goal Line (1-5)", "Tight (6-10)", "Fringe (11-20)")),
+    zone       = cut(yards_to_goal, c(0, 5, 10, 20, Inf),
+                     labels = c("Goal Line (1-5)", "Tight (6-10)", "Fringe (11-20)", "Outside RZ (>20)")),
     goal_to_go = distance >= yards_to_goal,
     play_call  = if_else(coalesce(pass == 1, FALSE), "Pass", "Rush")
   )
@@ -340,7 +340,8 @@ rz_plays <- rz$pbp |>
 ## League context: EPA by zone and play type ----
 rz_league <- rz_plays |>
   summarise(plays = n(), epa = mean(EPA), success_rate = mean(success, na.rm = TRUE),
-            .by = c(zone, play_call))
+            .by = c(zone, play_call)) |> 
+  mutate(zone = fct_na_value_to_level(zone, "Outside RZ (>20)"))
 print(rz_league)
 
 p <- ggplot(rz_league, aes(x = zone, y = epa, fill = play_call)) +
@@ -356,7 +357,10 @@ p <- ggplot(rz_league, aes(x = zone, y = epa, fill = play_call)) +
     caption = "Data: cfbfastR, ggplot2"
   ) +
   theme_rz() +
-  theme(legend.position = "top")
+  theme(legend.position = "top") +
+  scale_y_continuous(
+    expand = expansion(mult = c(0.15, 0.15)) 
+  )
 save_plot(p, "bar_league_epa_by_zone")
 
 ## Team play-level summary ----
