@@ -340,7 +340,8 @@ rz_plays <- rz$pbp |>
 ## League context: EPA by zone and play type ----
 rz_league <- rz_plays |>
   summarise(plays = n(), epa = mean(EPA), success_rate = mean(success, na.rm = TRUE),
-            .by = c(zone, play_call))
+            .by = c(zone, play_call)) |> 
+  mutate(zone = fct_na_value_to_level(zone, level = "Outside RZ (>20)"))
 print(rz_league)
 
 p <- ggplot(rz_league, aes(x = zone, y = epa, fill = play_call)) +
@@ -356,7 +357,10 @@ p <- ggplot(rz_league, aes(x = zone, y = epa, fill = play_call)) +
     caption = "Data: cfbfastR, ggplot2"
   ) +
   theme_rz() +
-  theme(legend.position = "top")
+  theme(legend.position = "top") +
+  scale_y_continuous(
+    expand = expansion(mult = c(0.15, 0.15)) 
+  )
 save_plot(p, "bar_league_epa_by_zone")
 
 ## Team play-level summary ----
