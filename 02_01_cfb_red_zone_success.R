@@ -151,7 +151,7 @@ print(team_rz |> arrange(desc(avg_points_off)) |>
 print(team_rz |> arrange(avg_points_def) |>
         select(team, trips_def, points_def, avg_points_def, adj_def_points), n = 50)
 
-# Section 1: Average Points Scored ----
+# Plot 1: Average Points Scored ----
 
 ## Scatterplot of average points scored and allowed ----
 p <- plot_logo_quadrant(
@@ -200,7 +200,7 @@ p <- plot_net_bar(
 )
 save_plot(p, "column_net_team_points_meancentered_adj", width = 20, height = 6)
 
-# Section 2: Percent TDs in Red Zone ----
+# Plot 2: Percent TDs in Red Zone ----
 
 ## Offense vs defense TD rate ----
 p <- plot_logo_quadrant(
@@ -227,9 +227,9 @@ p <- plot_logo_quadrant(
 )
 save_plot(p, "scatter_offense_defense_td_pct_adj")
 
-## Settling for 3 vs going for 7 (top 60 by scoring rate) ----
+## Settling for 3 vs going for 7 (top 40 by scoring rate) ----
 plot_dumbbell <- team_rz |>
-  slice_max(pct_score_off, n = 60, with_ties = FALSE) |>
+  slice_max(pct_score_off, n = 40, with_ties = FALSE) |>
   mutate(team = reorder(team, pct_score_off))
 
 p <- ggplot(plot_dumbbell) +
@@ -240,14 +240,14 @@ p <- ggplot(plot_dumbbell) +
   add_watermark(max(plot_dumbbell$pct_score_off) * 0.98, 3) +
   scale_x_continuous(labels = scales::percent_format(accuracy = 1)) +
   labs(
-    title = "Top 60 Red Zone Finishers vs. Field Goal Settlers",
+    title = "Top 40 Red Zone Finishers vs. Field Goal Settlers",
     subtitle = "Logo shows Red Zone Touchdown % | Blue dot shows Total Red Zone Scoring % (TD + FG)",
     x = "Conversion Rate", y = NULL,
     caption = paste(CAP_DATA, CAP_RZ, sep = "\n")
   ) +
   theme_rz() +
   theme(axis.text.y = element_blank())
-save_plot(p, "dumbell_red_zone_finishing", width = 13, height = 20)
+save_plot(p, "dumbell_red_zone_finishing", width = 13, height = 15)
 
 ## Red zone volume vs efficiency ----
 p <- ggplot(team_rz, aes(x = trips_per_game_off, y = pct_td_off)) +
@@ -284,7 +284,7 @@ p <- ggplot(plot_outcomes, aes(x = pct, y = team, fill = outcome)) +
   scale_x_continuous(labels = scales::percent_format()) +
   scale_fill_manual(values = c("Touchdown" = "#2e7d32", "Field Goal" = "#fbc02d", "No Points" = "#c62828")) +
   labs(
-    title = "Red Zone Drive Outcome Distribution\nFor The Top 40 Scoring Teams",
+    title = "Red Zone Drive Outcome Distribution For The Top 40 Scoring Teams",
     x = "Proportion of Red Zone Drives", y = NULL, fill = NULL,
     caption = paste(CAP_DATA, CAP_RZ, sep = "\n")
   ) +
@@ -313,3 +313,17 @@ p <- ggplot(plot_ratio, aes(x = ratio_td_drives, y = team)) +
   theme_rz() +
   theme(axis.text.y = element_text(size = 7.5))
 save_plot(p, "lollipop_redzone_ratio", width = 14, height = 20)
+
+# Save Results for the Report ----
+# Read by 03_01_cfb_red_zone_report.Rmd so the manuscript's numbers match these outputs.
+saveRDS(
+  list(
+    season         = SEASON,
+    team_rz        = team_rz,
+    ratings_points = ratings_points,
+    ratings_tds    = ratings_tds,
+    lambda_points  = attr(ratings_points, "lambda"),
+    lambda_tds     = attr(ratings_tds, "lambda")
+  ),
+  file.path(DIR_OUTPUTS, paste0(OUT_PREFIX, "results.rds"))
+)
