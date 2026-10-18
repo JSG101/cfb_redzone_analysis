@@ -338,3 +338,26 @@ p <- ggplot(form_plot, aes(y = team)) +
   theme_rz() +
   theme(legend.position = "top")
 save_plot(p, "arrow_recent_form", width = 12, height = 9)
+
+# Save Results for the Report ----
+# Read by 03_01_cfb_red_zone_report.Rmd so the manuscript's numbers match these outputs.
+saveRDS(
+  list(
+    season           = SEASON,
+    latest_week      = LATEST_WEEK,
+    weeks_played     = weeks_played,
+    recent_weeks     = recent_weeks,
+    recent_n         = RECENT_N,
+    shrink_k         = SHRINK_K,
+    min_recent_trips = MIN_RECENT_TRIPS,
+    headline         = headline,
+    week_games       = week_games,
+    movers           = movers,
+    lambda_movers    = attr(fit_now, "lambda"),
+    goal_line_stands = goal_line_stands,
+    league_week      = league_week,
+    cum_poe_latest   = cum_poe |> filter(week == max(weeks_played)),
+    form             = form
+  ),
+  file.path(DIR_OUTPUTS, paste0(OUT_PREFIX, "results.rds"))
+)
