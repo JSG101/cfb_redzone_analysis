@@ -49,7 +49,7 @@ GARBAGE_MARGIN   <- 28
 RECENT_N         <- 3            # recent-form window, in weeks
 SHRINK_K         <- 10           # recent form: pseudo-trips at league-average POE (0) added to each window
 MIN_RECENT_TRIPS <- 4            # recent form: minimum red zone trips in the recent window
-TOP_N            <- 10           # bars per side in the week leaders chart
+TOP_N            <- 25           # bars per side in the week leaders chart
 FOCUS_TEAMS      <- NULL         # running tab: teams to highlight, e.g. c("Georgia", "Alabama")
 FOCUS_CONFERENCE <- NULL         # running tab: or highlight a conference, e.g. "SEC"
 SEED             <- 2026
@@ -134,7 +134,7 @@ p <- ggplot(week_lb_plot, aes(x = poe, y = bar_label, fill = side)) +
   ) +
   theme_rz() +
   theme(axis.text.y = element_text(size = 9))
-save_plot(p, paste0("bar_week", LATEST_WEEK, "_poe_leaders"), width = 12, height = 9)
+save_plot(p, paste0("bar_week", LATEST_WEEK, "_poe_leaders"), width = 12, height = 25)
 
 # A2. Movers: How the Week Changed Adjusted Ratings ----
 # Same penalty (lambda) for both fits, so the change reflects the new games,
