@@ -404,6 +404,9 @@ find_quadrant_whitespace <- function(df, x_col, y_col,
   
   # panel limits, matching ggplot's default 5% expansion
   xr <- range(c(x, x_mean)); yr <- range(c(y, y_mean))
+  # guard against an axis with no spread (e.g., ratings fully shrunk to the mean)
+  if (diff(xr) == 0) xr <- xr + c(-0.5, 0.5) * max(abs(xr[1]), 1)
+  if (diff(yr) == 0) yr <- yr + c(-0.5, 0.5) * max(abs(yr[1]), 1)
   xlo <- xr[1] - expand * diff(xr); xhi <- xr[2] + expand * diff(xr)
   ylo <- yr[1] - expand * diff(yr); yhi <- yr[2] + expand * diff(yr)
   
