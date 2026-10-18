@@ -1,0 +1,682 @@
+---
+title: "Finishing Drives: A Play-by-Play Framework for Measuring Red Zone Efficiency in FBS College Football"
+subtitle: "Evidence from the `r params$season` Season"
+author:
+  - "Japbir Gill, MBA, MSEd"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+params:
+  season: 2026
+  outputs_dir: NULL
+output:
+  bookdown::html_document2:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    fig_caption: true
+    self_contained: true
+  bookdown::pdf_document2:
+    toc: false
+    number_sections: true
+    fig_caption: true
+    latex_engine: xelatex
+link-citations: true
+references:
+  - id: carter1971
+    type: article-journal
+    author: [{family: Carter, given: Virgil}, {family: Machol, given: Robert E.}]
+    title: "Operations research on football"
+    container-title: Operations Research
+    volume: 19
+    issue: 2
+    page: 541-544
+    issued: {year: 1971}
+  - id: romer2006
+    type: article-journal
+    author: [{family: Romer, given: David}]
+    title: "Do firms maximize? Evidence from professional football"
+    container-title: Journal of Political Economy
+    volume: 114
+    issue: 2
+    page: 340-365
+    issued: {year: 2006}
+  - id: yurko2019
+    type: article-journal
+    author: [{family: Yurko, given: Ronald}, {family: Ventura, given: Samuel}, {family: Horowitz, given: Maksim}]
+    title: "nflWAR: A reproducible method for offensive player evaluation in football"
+    container-title: Journal of Quantitative Analysis in Sports
+    volume: 15
+    issue: 3
+    page: 163-183
+    issued: {year: 2019}
+  - id: efron1975
+    type: article-journal
+    author: [{family: Efron, given: Bradley}, {family: Morris, given: Carl}]
+    title: "Data analysis using Stein's estimator and its generalizations"
+    container-title: Journal of the American Statistical Association
+    volume: 70
+    issue: 350
+    page: 311-319
+    issued: {year: 1975}
+  - id: morris1983
+    type: article-journal
+    author: [{family: Morris, given: Carl N.}]
+    title: "Parametric empirical Bayes inference: Theory and applications"
+    container-title: Journal of the American Statistical Association
+    volume: 78
+    issue: 381
+    page: 47-55
+    issued: {year: 1983}
+  - id: hoerl1970
+    type: article-journal
+    author: [{family: Hoerl, given: Arthur E.}, {family: Kennard, given: Robert W.}]
+    title: "Ridge regression: Biased estimation for nonorthogonal problems"
+    container-title: Technometrics
+    volume: 12
+    issue: 1
+    page: 55-67
+    issued: {year: 1970}
+  - id: friedman2010
+    type: article-journal
+    author: [{family: Friedman, given: Jerome}, {family: Hastie, given: Trevor}, {family: Tibshirani, given: Robert}]
+    title: "Regularization paths for generalized linear models via coordinate descent"
+    container-title: Journal of Statistical Software
+    volume: 33
+    issue: 1
+    page: 1-22
+    issued: {year: 2010}
+  - id: sill2010
+    type: paper-conference
+    author: [{family: Sill, given: Joseph}]
+    title: "Improved NBA adjusted +/- using regularization and out-of-sample testing"
+    container-title: MIT Sloan Sports Analytics Conference
+    issued: {year: 2010}
+  - id: spearman1910
+    type: article-journal
+    author: [{family: Spearman, given: Charles}]
+    title: "Correlation calculated from faulty data"
+    container-title: British Journal of Psychology
+    volume: 3
+    issue: 3
+    page: 271-295
+    issued: {year: 1910}
+  - id: brown1910
+    type: article-journal
+    author: [{family: Brown, given: William}]
+    title: "Some experimental results in the correlation of mental abilities"
+    container-title: British Journal of Psychology
+    volume: 3
+    issue: 3
+    page: 296-322
+    issued: {year: 1910}
+  - id: wickham2019
+    type: article-journal
+    author: [{family: Wickham, given: Hadley}, {literal: "et al."}]
+    title: "Welcome to the tidyverse"
+    container-title: Journal of Open Source Software
+    volume: 4
+    issue: 43
+    page: 1686
+    issued: {year: 2019}
+  - id: cfbfastr
+    type: software
+    author: [{family: Gilani, given: Saiem}, {family: Easwaran, given: Akshay}, {family: Lee, given: Jared}, {family: Hess, given: Eric}]
+    title: "cfbfastR: The SportsDataverse's R package for college football data"
+    URL: https://cfbfastR.sportsdataverse.org/
+    issued: {year: 2021}
+  - id: cfbd
+    type: webpage
+    author: [{literal: CollegeFootballData.com}]
+    title: "College Football Data API"
+    URL: https://collegefootballdata.com
+    issued: {year: 2026}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
+                      fig.align = "center", out.width = "100%")
+library(tidyverse)
+library(knitr)
+
+## Locate outputs ----
+# Knit after running 02_01, 02_02 and 02_03, which save figures and a results
+# file to DIR_OUTPUTS. Set params$outputs_dir to point somewhere else.
+if (is.null(params$outputs_dir)) {
+  source("00_00_dirs_libs_funs_vals.R")
+  out_dir <- DIR_OUTPUTS
+} else {
+  out_dir <- params$outputs_dir
+}
+
+P1 <- "proj_012_02_01_"; P2 <- "proj_012_02_02_"; P3 <- "proj_012_02_03_"
+
+read_results <- function(prefix) {
+  f <- file.path(out_dir, paste0(prefix, "results.rds"))
+  if (!file.exists(f)) stop("Results file not found: ", f,
+                            "\nRun the matching 02_0x script before knitting.", call. = FALSE)
+  readRDS(f)
+}
+r1 <- read_results(P1); r2 <- read_results(P2); r3 <- read_results(P3)
+
+## Formatting helpers ----
+pct <- function(x, d = 1) scales::percent(x, accuracy = 10^-d)
+num <- function(x, d = 2) formatC(x, format = "f", digits = d, big.mark = ",")
+int <- function(x) format(round(x), big.mark = ",")
+pval <- function(p) if (is.na(p)) "NA" else if (p < 0.001) "< 0.001" else paste("=", num(p, 3))
+
+fig <- function(prefix, name) {
+  f <- file.path(out_dir, paste0(prefix, name, ".png"))
+  if (file.exists(f)) knitr::include_graphics(f, rel_path = FALSE)
+  else knitr::asis_output(paste0("*[Figure file not found: ", basename(f), "]*"))
+}
+
+## Values used in the text ----
+s  <- r2$sample
+wk <- r2$weeks
+
+dc <- r2$definition_check
+old_n       <- sum(dc$n[dc$old_definition %in% TRUE])
+new_n       <- sum(dc$n[dc$new_definition %in% TRUE])
+long_tds    <- sum(dc$n[dc$old_definition %in% TRUE & !dc$new_definition & dc$flag_td == 1])
+backed_out  <- sum(dc$n[!(dc$old_definition %in% TRUE) & dc$new_definition])
+both_n      <- sum(dc$n[dc$old_definition %in% TRUE & dc$new_definition])
+
+tds_total   <- sum(r2$td_source$total_tds)
+tds_outside <- sum(r2$td_source$tds_outside_rz)
+
+xp1 <- r2$xp_curve |> filter(rz_entry_down == 1)
+xp_at <- function(y) xp1$xpts[xp1$rz_entry_ytg == y]
+
+out_share <- function(o) { v <- r2$rz_outcomes$pct[r2$rz_outcomes$rz_outcome == o]; if (length(v)) v else 0 }
+
+rel <- r2$reliability
+rel_get <- function(side, metric) rel$reliability_full[rel$side == side & rel$metric == metric]
+
+shr <- r2$td_shrunk
+shrink_ratio <- sd(shr$td_rate_shrunk) / sd(shr$td_rate_raw)
+
+dof <- r2$decomp_off
+var_ppd    <- var(dof$ppd_vs_avg)
+share_acc  <- cov(dof$access_effect, dof$ppd_vs_avg) / var_ppd
+share_fin  <- cov(dof$finishing_effect, dof$ppd_vs_avg) / var_ppd
+share_non  <- cov(dof$non_rz_effect, dof$ppd_vs_avg) / var_ppd
+cor_acc_fin <- cor(dof$access_effect, dof$finishing_effect)
+
+trz <- r1$team_rz
+lg_td_rate <- sum(trz$tds_off) / sum(trz$trips_off)
+cor_raw_adj_pts <- cor(trz$avg_points_off, trz$adj_off_points)
+cor_vol_eff <- cor(trz$trips_per_game_off, trz$pct_td_off)
+
+rzl <- r2$rz_league
+epa_cell <- function(z, pc) rzl$epa[rzl$zone == z & rzl$play_call == pc]
+
+fs <- r2$fourth_summary
+neg <- r2$neg_td_cor
+
+ppoe <- r2$plot_poe
+cor_poe_off_def <- cor(ppoe$poe_off_per_trip, ppoe$poe_def_per_trip, use = "complete.obs")
+top_poe <- ppoe |> slice_max(adj_off, n = 1, with_ties = FALSE)
+
+lw  <- r3$latest_week
+hl  <- r3$headline
+hl_week  <- hl |> filter(period == paste0("Week ", lw))
+hl_prior <- hl |> filter(period != paste0("Week ", lw))
+mv  <- r3$movers
+top_up   <- mv |> slice_max(delta, n = 1, with_ties = FALSE)
+top_down <- mv |> slice_min(delta, n = 1, with_ties = FALSE)
+gls <- r3$goal_line_stands
+
+abstract_text <- paste0(
+  "Red zone efficiency, the rate at which offenses convert trips inside the opponent's 20-yard line into touchdowns, ",
+  "is among the most widely cited team statistics in American football, yet its standard construction conflates ",
+  "explosive scoring with finishing ability, ignores field position within the red zone, and is rarely accompanied by ",
+  "any assessment of its own reliability. Using play-by-play data for ", int(s$games), " Football Bowl Subdivision (FBS) games ",
+  "from weeks ", min(wk), "-", max(wk), " of the ", params$season, " season (", int(s$rz_trips), " red zone trips), we propose a ",
+  "framework that (i) defines a red zone trip as any possession with at least one scrimmage snap inside the 20, ",
+  "(ii) measures outcomes as points over expected (POE) conditional on entry yard line and down, (iii) adjusts for ",
+  "opponent strength and home field through penalized (ridge) regression, (iv) stabilizes small-sample rates with ",
+  "empirical Bayes shrinkage, and (v) quantifies signal-to-noise with split-half reliability. The conventional ",
+  "end-of-drive definition misclassified ", int(long_tds + backed_out), " drives. Split-half reliability of offensive ",
+  "red zone touchdown rate was ", num(rel_get("Offense", "flag_td")), ", compared with ", num(rel_get("Offense", "EPA")),
+  " for offensive EPA per play, ",
+  if (rel_get("Offense", "flag_td") < rel_get("Offense", "EPA"))
+    "indicating that observed differences in red zone touchdown rate are noisier than differences in overall efficiency. "
+  else "indicating that red zone touchdown rate is at least as stable as overall efficiency at this sample size. ",
+  "We further decompose points per drive into red zone access, red zone finishing, ",
+  "and non-red-zone scoring, evaluate fourth-down decisions inside the 20 against a simple expected-value model, and ",
+  "introduce a weekly monitoring procedure that reports changes in schedule-adjusted ratings under a fixed penalty. ",
+  "All data, code and figures are reproducible from public sources."
+)
+```
+
+# Abstract {-}
+
+`r abstract_text`
+
+**Keywords:** college football; red zone; expected points; ridge regression; empirical Bayes; reliability; sports analytics
+
+# Introduction
+
+Few statistics are cited as often in American football broadcasts and previews as red zone efficiency: the share of possessions reaching the opponent's 20-yard line that end in a touchdown. Its appeal is intuitive. The red zone compresses the field, limits the vertical passing game and rewards execution, so a team that "settles for three" appears to leave points on the table. Yet as typically computed, the statistic carries at least four problems that limit its value as a measure of team quality.
+
+First, the definition of a red zone *trip* is often operationalized from drive summaries, by asking whether the drive *ended* inside the 20. Because every touchdown drive ends at the goal line, this rule counts long scoring plays from midfield as red zone conversions, inflating the touchdown rates of explosive offenses and penalizing defenses for plays that never occurred inside the 20. Conversely, drives that reached the 20 and were pushed back by sacks or penalties are dropped. Second, the red zone is not homogeneous: a first down at the 3-yard line and a third down at the 19 are both "in the red zone" but carry very different scoring expectations. Third, raw rates ignore schedule strength and home field. Fourth, and most important for interpretation, a typical FBS team accumulates only a few dozen trips in half a season, so observed differences in conversion rate may be dominated by binomial noise.
+
+This paper develops a reproducible framework that addresses each issue, applies it to the `r params$season` FBS season through week `r max(wk)`, and reports both cumulative and weekly views. The contributions are:
+
+1. a play-by-play definition of a red zone trip, with a quantified comparison against the end-of-drive definition;
+2. a red zone points-over-expected (POE) measure conditional on entry yard line and down;
+3. opponent- and venue-adjusted team ratings estimated by ridge regression;
+4. empirical Bayes shrinkage and split-half reliability estimates that make the signal-to-noise ratio of each metric explicit;
+5. an exact decomposition of points per drive into red zone access, red zone finishing and non-red-zone scoring;
+6. a fourth-down decision audit and a weekly monitoring procedure built on the same models.
+
+# Related Work
+
+Expected points models assign a value to each game state and date to @carter1971, who estimated the expected point value of possession by field position in professional football. Modern expected points added (EPA) models, which condition on down, distance, field position and game context, underpin open-source football analytics; @yurko2019 provide a reproducible framework and discuss its use for player and team evaluation. Our POE measure applies the same logic to a single possession type: the value of a red zone trip conditional on where it began.
+
+The fourth-down analysis follows @romer2006, who showed that professional teams kick far more often than an expected-value calculation supports. We adapt a simplified version of that calculation to college football's red zone.
+
+Schedule adjustment through regularized regression on team indicators is closely related to adjusted plus-minus models in basketball, where ridge penalties [@hoerl1970] were introduced to stabilize estimates in the presence of collinearity and limited data [@sill2010]. We estimate these models with coordinate descent [@friedman2010]. Shrinkage of observed rates toward a population mean follows the empirical Bayes tradition of @efron1975 and @morris1983, and our reliability analysis uses the split-half method with the Spearman-Brown correction [@spearman1910; @brown1910].
+
+# Data
+
+## Source
+
+Play-by-play, drive and game data were obtained from the CollegeFootballData.com API [@cfbd] via the `cfbfastR` R package [@cfbfastr], with play-level expected points (`ep_before`) and EPA as supplied by `cfbfastR`. Data were retrieved one week at a time and cached locally, so each week is downloaded once and every analysis runs on an identical snapshot. Data manipulation used the tidyverse [@wickham2019].
+
+## Sample
+
+The sample comprises all regular-season drives involving at least one FBS team in weeks `r min(wk)`-`r max(wk)` of the `r params$season` season. Table \@ref(tab:sample) summarizes the sample and the exclusions described in Section \@ref(exclusions).
+
+```{r sample}
+tibble(
+  Quantity = c("Games", "FBS teams", "Drives (all)",
+               "Excluded: drive ended at end of half or game",
+               "Excluded: second-half garbage time",
+               "Excluded: atypical point value",
+               "Drives retained for analysis",
+               "Red zone trips (play-by-play definition)",
+               "Red zone rush and pass plays"),
+  N = c(s$games, s$fbs_teams, s$drives_total, s$excl_end_period, s$excl_garbage,
+        s$excl_bad_score, s$drives_analysis, s$rz_trips, s$rz_plays)
+) |>
+  mutate(N = int(N)) |>
+  kable(caption = paste0("Sample composition, ", params$season, " FBS regular season, weeks ",
+                         min(wk), "-", max(wk), "."), align = c("l", "r"))
+```
+
+# Methods
+
+## Defining a red zone trip {#definition}
+
+Let $\mathcal{P}_d$ denote the set of plays on drive $d$, and for each play $p$ let $y_p$ be the offense's distance to the goal line and $s_p$ indicate a scrimmage play (excluding kickoffs, timeouts, period markers, try attempts and administrative records). Drive $d$ is a red zone trip if
+
+$$
+T_d = \mathbb{1}\left\{\exists\, p \in \mathcal{P}_d : s_p = 1,\; y_p \le `r r2$rz_line` \right\}.
+$$
+
+For each trip we record the entry yard line $e_d$ and entry down $k_d$, the values of $y_p$ and down at the first qualifying snap. This definition counts drives that reached the 20 and then lost yardage, and excludes scoring plays launched from outside the 20, which are tracked separately.
+
+## Outcomes and exclusions {#exclusions}
+
+The outcome of drive $d$ is the change in the offense's score over the drive, $Y_d = S^{\text{off}}_{d,\text{end}} - S^{\text{off}}_{d,\text{start}}$. This counts missed extra points and two-point conversions correctly, unlike a fixed value of 7 per touchdown. Touchdown and field goal indicators are derived from $Y_d$ ($Y_d \ge 6$ and $Y_d = 3$). Three classes of drives are excluded:
+
+- drives ending at the end of a half or game, which are often kneel-downs or clock-limited;
+- second-half drives beginning with a score margin above `r r2$garbage_margin` points, a simple garbage-time rule;
+- drives with atypical point values (outside $\{0, 3, 6, 7, 8\}$), which usually reflect data errors or defensive scores on the same possession.
+
+## Expected points and points over expected
+
+Expected red zone points are estimated from all trips with a linear model,
+
+$$
+Y_d = \beta_0 + \sum_{j=1}^{3} \beta_j B_j(e_d) + \sum_{k=2}^{4} \gamma_k \mathbb{1}\{k_d = k\} + \varepsilon_d,
+$$
+
+where $B_j$ are natural cubic spline basis functions of the entry yard line. Points over expected are the residuals, $\text{POE}_d = Y_d - \hat{Y}_d$, so league-average POE is zero by construction. The model's $R^2$ is `r num(r2$xp_model_r2, 3)`. Its modest size is expected: entry position explains the *baseline* value of a trip, and most remaining variation is the outcome itself.
+
+## Opponent and venue adjustment
+
+For an outcome $Y_d$ (points, POE or a touchdown indicator), let $o(d)$ and $\delta(d)$ index the offense and defense, and let $h_d \in \{1, 0, -1\}$ indicate home, neutral and away for the offense. We fit
+
+$$
+Y_d = \mu + \theta_{o(d)} + \phi_{\delta(d)} + \eta\, h_d + \varepsilon_d,
+$$
+
+with indicators for every offense and every defense (no reference level), by minimizing
+
+$$
+\frac{1}{2n}\sum_{d}\left(Y_d - \mu - \theta_{o(d)} - \phi_{\delta(d)} - \eta h_d\right)^2 + \lambda\left(\sum_t \theta_t^2 + \sum_t \phi_t^2 + \eta^2\right).
+$$
+
+The penalty $\lambda$ is chosen by 10-fold cross-validation (`cv.glmnet`, minimum CV error). Including all team levels and relying on the penalty for identification avoids arbitrarily anchoring one team at zero. For the touchdown indicator, the squared-error loss is replaced by the binomial deviance, and ratings are reported on the probability scale, $\text{logit}^{-1}(\hat{\mu} + \hat{\theta}_t)$. Because the default regularization path for binomial ridge models can terminate after a few very large values of $\lambda$, which shrinks all teams to the mean, we supply an explicit logarithmic grid ($10$ to $10^{-5}$). Adjusted ratings $\hat{\mu} + \hat{\theta}_t$ (offense) and $\hat{\mu} + \hat{\phi}_t$ (defense) represent expected outcomes at a neutral site against an average opponent.
+
+## Empirical Bayes shrinkage of rates
+
+For team $t$ with $x_t$ touchdowns in $n_t$ trips, we estimate a beta prior by the method of moments. Let $m$ be the pooled rate, $v$ the trip-weighted variance of observed rates, and $\hat{\tau}^2 = \max\{v - m(1-m)\,\overline{n^{-1}},\, \epsilon\}$ the estimated between-team variance. The prior strength is $\kappa = m(1-m)/\hat{\tau}^2 - 1$, and the shrunk rate is
+
+$$
+\tilde{p}_t = \frac{x_t + \kappa m}{n_t + \kappa}.
+$$
+
+## Reliability
+
+For each metric we randomly split each team's observations in half, compute team means in each half, and correlate them across teams ($r_{1/2}$). Averaging over 200 random splits and applying the Spearman-Brown correction gives the reliability of the full-sample team mean, $\rho = 2 r_{1/2} / (1 + r_{1/2})$. Reliability is interpretable as the share of between-team variance attributable to persistent differences rather than noise; a value of 0.5 implies observed gaps between teams should be expected to shrink by about half going forward.
+
+## Decomposing points per drive
+
+Let $r_t$ be the share of team $t$'s drives that become red zone trips, $f_t$ its points per trip and $g_t$ its points per non-red-zone drive. Then $\text{PPD}_t = r_t f_t + (1 - r_t) g_t$, and, with bars denoting league values,
+
+$$
+\text{PPD}_t - \overline{\text{PPD}} = \underbrace{(r_t - \bar{r})(\bar{f} - \bar{g})}_{\text{access}} + \underbrace{r_t (f_t - \bar{f})}_{\text{finishing}} + \underbrace{(1 - r_t)(g_t - \bar{g})}_{\text{non-red-zone}},
+$$
+
+an exact identity.
+
+## Play-level efficiency
+
+Within red zone trips we summarize rush and pass plays by EPA and success rate (as defined by `cfbfastR`), stratified by zone (1-5, 6-10 and 11-20 yards from the goal).
+
+## Fourth-down decision model
+
+For fourth downs inside the 20 in quarters 1-3, we compare the expected value of a field goal attempt with that of going for it. Let $y$ be yards to goal, $\ell$ yards to go, $\text{EP}(\cdot)$ the expected points of a first down at a given distance from the goal (a spline fit to `ep_before` on first downs), and $\text{EP}_{ko} = \text{EP}(75)$ the opponent's expected points after a touchback. Field goal success $p_{FG}$ is a logistic function of kick distance $y + 17$, and conversion probability $p_c$ is a logistic function of $\log \ell$, a goal-to-go indicator and $y$, both estimated from `r params$season` data. Then
+
+$$
+\begin{aligned}
+\text{EV}_{FG} &= p_{FG}\,(3 - \text{EP}_{ko}) - (1 - p_{FG})\,\text{EP}\!\left(100 - \max\{y + 7, 20\}\right),\\
+\text{EV}_{go} &= p_c\, V_s - (1 - p_c)\,\text{EP}(100 - y), \qquad
+V_s = \begin{cases} 7 - \text{EP}_{ko} & \text{goal to go} \\ \text{EP}(y - \ell) & \text{otherwise.}\end{cases}
+\end{aligned}
+$$
+
+The model recommends going for it when $\text{EV}_{go} > \text{EV}_{FG}$. It deliberately ignores score, time remaining and kicker quality, which is why the fourth quarter is excluded.
+
+## Weekly monitoring
+
+For the most recent week $W$, we refit the POE ridge model on weeks $1,\dots,W$ and on weeks $1,\dots,W-1$, using the cross-validated $\hat{\lambda}$ from the full fit in both. Fixing $\lambda$ ensures that a change in a team's net rating, $\Delta_t = (\hat{\theta}_t - \hat{\phi}_t)^{(W)} - (\hat{\theta}_t - \hat{\phi}_t)^{(W-1)}$, reflects the new games rather than a change in regularization. Recent form compares POE per trip over the last `r r3$recent_n` weeks with earlier weeks, shrinking each window toward zero by adding $K = `r r3$shrink_k`$ league-average pseudo-trips: $\sum \text{POE} / (n + K)$.
+
+## Software and visualization
+
+All analyses were performed in R with `glmnet` [@friedman2010] and the tidyverse [@wickham2019]. Figures display team logos. Several scatter plots include informal quadrant labels as visual mnemonics. These carry no analytic weight, and each figure's axes and caption state the formal quantities.
+
+# Results
+
+## How the definition changes the sample
+
+Table \@ref(tab:defcheck) cross-tabulates the end-of-drive and play-by-play definitions. Of the `r int(old_n)` drives the conventional rule counts as red zone trips, `r int(long_tds)` are touchdown drives whose scoring play began outside the 20. A further `r int(backed_out)` drives reached the 20 under the play-by-play definition but ended outside it, and are omitted by the conventional rule. Across all offenses, `r pct(tds_outside / tds_total)` of touchdowns (`r int(tds_outside)` of `r int(tds_total)`) were scored on drives that never had a snap inside the 20, a quantity that conventional red zone statistics silently credit to "finishing."
+
+```{r defcheck}
+dc |>
+  group_by(old_definition, new_definition) |>
+  summarise(Drives = sum(n), TD = sum(n[flag_td == 1]), .groups = "drop") |>
+  mutate(
+    `End-of-drive rule` = if_else(old_definition %in% TRUE, "Trip", "Not a trip"),
+    `Play-by-play rule` = if_else(new_definition, "Trip", "Not a trip"),
+    Drives = int(Drives), TD = int(TD)
+  ) |>
+  select(`End-of-drive rule`, `Play-by-play rule`, Drives, `Of which touchdowns` = TD) |>
+  kable(caption = "Agreement between the end-of-drive and play-by-play definitions of a red zone trip (analysis drives).",
+        align = c("l", "l", "r", "r"))
+```
+
+## Expected points by entry position
+
+Figure \@ref(fig:xp-curve) shows expected points as a function of entry yard line and down. A first-down entry at the 20 is worth `r num(xp_at(20))` expected points, rising to `r num(xp_at(10))` at the 10, `r num(xp_at(5))` at the 5 and `r num(xp_at(1))` at the 1. Later-down entries are worth less at every distance. The curve shows why raw touchdown rate partly measures field position: teams whose trips begin closer to the goal (through short fields, turnovers or explosive plays that stop just short) are mechanically advantaged.
+
+```{r xp-curve, fig.cap = "Expected red zone points by entry yard line and down. Gray points show observed mean points per trip by entry yard line (size proportional to trips); lines show the fitted spline model by down."}
+fig(P2, "line_expected_points_by_entry")
+```
+
+## Raw red zone scoring
+
+Figure \@ref(fig:raw-points) plots each team's average points per red zone trip on offense against average points allowed per trip on defense, with the defensive axis inverted so that the upper-right quadrant contains teams strong on both sides. The league scored touchdowns on `r pct(lg_td_rate)` of trips; `r pct(out_share("Field Goal"))` ended in field goals and `r pct(out_share("Turnover") + out_share("Turnover on Downs"))` in turnovers or turnovers on downs.
+
+```{r raw-points, fig.cap = "Average red zone points per trip scored (x) and allowed (y, inverted), by FBS team. Dashed lines mark FBS means."}
+fig(P1, "scatter_offense_defense_sores")
+```
+
+Figures \@ref(fig:net-raw) and \@ref(fig:net-adj) rank teams by net red zone points per trip (offense minus defense), centered on the FBS mean, before and after schedule adjustment.
+
+```{r net-raw, fig.cap = "Mean-centered net red zone points per trip (offense minus defense), unadjusted."}
+fig(P1, "column_net_team_points_meancentered")
+```
+
+```{r net-adj, fig.cap = "Mean-centered net red zone points per trip after ridge adjustment for opponent and venue."}
+fig(P1, "column_net_team_points_meancentered_adj")
+```
+
+## Schedule-adjusted scoring
+
+Figure \@ref(fig:adj-points) repeats Figure \@ref(fig:raw-points) using ridge-adjusted ratings. The correlation between raw and adjusted offensive points per trip is `r num(cor_raw_adj_pts)`. Adjustment compresses the distribution, because the penalty shrinks teams with few trips toward the mean, and reorders teams whose schedules were unusually strong or weak.
+
+```{r adj-points, fig.cap = "Ridge-adjusted red zone points per trip scored (x) and allowed (y, inverted): expected values at a neutral site against an average opponent."}
+fig(P1, "scatter_offense_defense_sores_adj")
+```
+
+## Touchdown rates
+
+Figures \@ref(fig:td-raw) and \@ref(fig:td-adj) present the more familiar touchdown-rate view, raw and adjusted (logistic ridge). The adjusted panel is substantially compressed relative to the raw panel. This is not an artifact: it is the model's estimate of how much of the raw spread would persist against a common schedule, and it agrees with the reliability results in Section \@ref(reliability-results).
+
+```{r td-raw, fig.cap = "Offensive red zone touchdown rate (x) versus defensive touchdown rate allowed (y, inverted), unadjusted."}
+fig(P1, "scatter_offense_defense_td_pct")
+```
+
+```{r td-adj, fig.cap = "Ridge-adjusted (logistic) red zone touchdown probability for offense (x) and defense (y, inverted)."}
+fig(P1, "scatter_offense_defense_td_pct_adj")
+```
+
+Figure \@ref(fig:dumbbell) separates touchdowns from field goals for the 40 teams with the highest red zone scoring rates. The horizontal gap between the logo (touchdown rate) and the dot (any-score rate) is the field goal share. Teams with similar scoring rates can differ widely in that gap, which matters because each field goal in place of a touchdown costs roughly four points.
+
+```{r dumbbell, out.width = "80%", fig.cap = "Red zone touchdown rate (logo) and total scoring rate (dot) for the 40 teams with the highest scoring rates."}
+fig(P1, "dumbell_red_zone_finishing")
+```
+
+Figure \@ref(fig:volume) relates red zone volume (trips per game) to touchdown rate. The correlation is `r num(cor_vol_eff)`. Volume and efficiency are therefore `r if (abs(cor_vol_eff) < 0.2) "largely distinct" else if (cor_vol_eff > 0) "positively related" else "negatively related"` dimensions of red zone performance, a point developed formally in Section \@ref(decomposition-results).
+
+```{r volume, fig.cap = "Red zone trips per game versus red zone touchdown rate, by offense. The dotted line is a least-squares fit."}
+fig(P1, "scatter_volume_efficiency")
+```
+
+Figure \@ref(fig:outcome-dist) shows the full distribution of trip outcomes (touchdown, field goal, no points) for the top 40 scoring offenses, and Figure \@ref(fig:ratio) the ratio of red zone touchdowns scored to touchdowns allowed. The ratio is undefined for teams that have allowed no red zone touchdowns, which are omitted.
+
+```{r outcome-dist, out.width = "60%", fig.cap = "Distribution of red zone trip outcomes for the 40 offenses with the highest red zone scoring rates."}
+fig(P1, "columns_outcome_distribution")
+```
+
+```{r ratio, out.width = "75%", fig.cap = "Ratio of offensive red zone touchdowns to defensive red zone touchdowns allowed. The dashed line marks parity."}
+fig(P1, "lollipop_redzone_ratio")
+```
+
+## Points over expected
+
+Figures \@ref(fig:poe-raw) and \@ref(fig:poe-adj) present the preferred team measure: points over expected per trip, which removes the entry-position effect documented in Figure \@ref(fig:xp-curve). The correlation between a team's offensive and defensive POE is `r num(cor_poe_off_def)`, consistent with red zone offense and defense being largely separate skills. After adjustment, the highest-rated offense is `r top_poe$team`, at `r num(top_poe$adj_off)` points over expected per trip.
+
+<!-- AUTHOR: add substantive discussion of notable teams here. -->
+
+```{r poe-raw, fig.cap = "Red zone points over expected per trip: offense (x) versus defense allowed (y, inverted). Zero is league average on both axes."}
+fig(P2, "scatter_poe")
+```
+
+```{r poe-adj, fig.cap = "Ridge-adjusted red zone points over expected per trip at a neutral site against an average opponent."}
+fig(P2, "scatter_poe_adj")
+```
+
+## Reliability and shrinkage {#reliability-results}
+
+Table \@ref(tab:reliability) and Figure \@ref(fig:reliability-fig) report split-half reliability. Offensive red zone touchdown rate has reliability `r num(rel_get("Offense", "flag_td"))` and defensive touchdown rate `r num(rel_get("Defense", "flag_td"))`, compared with `r num(rel_get("Offense", "EPA"))` and `r num(rel_get("Defense", "EPA"))` for offensive and defensive EPA per play across all plays. At this point in the season, `r if (rel_get("Offense", "flag_td") < 0.5) "less than half" else "more than half"` of the observed between-team variation in offensive red zone touchdown rate is attributable to persistent differences. Points over expected has reliability `r num(rel_get("Offense", "poe"))` on offense.`r if (any(rel$reliability_full < 0)) " Negative estimates arise when true between-team differences are near zero relative to sampling noise; they indicate no detectable signal and should be read as zero." else ""`
+
+```{r reliability}
+rel |>
+  transmute(Side = side, Metric = metric_label, Teams = teams,
+            `Split-half r` = num(split_half_r), `Reliability (Spearman-Brown)` = num(reliability_full)) |>
+  arrange(Side, desc(`Reliability (Spearman-Brown)`)) |>
+  kable(caption = "Split-half reliability of team-level red zone metrics (mean of 200 random splits).",
+        align = c("l", "l", "r", "r", "r"))
+```
+
+```{r reliability-fig, fig.cap = "Split-half reliability of red zone metrics, with overall EPA per play as a reference. The dashed line marks a reliability of 0.5."}
+fig(P2, "bar_reliability")
+```
+
+Figure \@ref(fig:shrinkage) applies empirical Bayes shrinkage to offensive touchdown rates. The standard deviation of shrunk rates is `r pct(shrink_ratio, 0)` of the raw standard deviation. Teams far from the diagonal have extreme raw rates built on few trips; their shrunk estimates are the better forecast of future performance.
+
+```{r shrinkage, fig.cap = "Raw versus empirical Bayes (beta-binomial) red zone touchdown rates by offense. The dashed line is the identity."}
+fig(P2, "scatter_td_rate_shrinkage")
+```
+
+## Access versus finishing {#decomposition-results}
+
+The decomposition in Figures \@ref(fig:access-finish) and \@ref(fig:decomp) attributes each offense's points per drive above or below average to reaching the red zone, finishing in it, and scoring from outside it. Measured as each component's share of the cross-team variance in points per drive, access accounts for `r pct(share_acc, 0)`, finishing for `r pct(share_fin, 0)` and non-red-zone scoring for `r pct(share_non, 0)` (shares sum to one and may be negative when components offset). The correlation between access and finishing effects is `r num(cor_acc_fin)`.
+
+```{r access-finish, fig.cap = "Points per drive relative to the FBS average attributable to red zone access (x) and red zone finishing (y), by offense."}
+fig(P2, "scatter_access_vs_finishing")
+```
+
+```{r decomp, out.width = "75%", fig.cap = "Decomposition of each offense's points per drive relative to the FBS average into red zone access, red zone finishing and non-red-zone scoring. Points mark the total."}
+fig(P2, "bar_ppd_decomposition_offense")
+```
+
+## Play-level efficiency inside the 20
+
+Figure \@ref(fig:epa-zone) reports league EPA per play by zone and play type. Inside the 5, passes average `r num(epa_cell("Goal Line (1-5)", "Pass"), 3)` EPA and rushes `r num(epa_cell("Goal Line (1-5)", "Rush"), 3)`; between the 11 and the 20, passes average `r num(epa_cell("Fringe (11-20)", "Pass"), 3)` and rushes `r num(epa_cell("Fringe (11-20)", "Rush"), 3)`. Figures \@ref(fig:epa-team) and \@ref(fig:run-pass) show team-level red zone EPA per play and its split by play type.
+
+```{r epa-zone, fig.cap = "League EPA per play inside the red zone by zone and play type, with success rates and play counts."}
+fig(P2, "bar_league_epa_by_zone")
+```
+
+```{r epa-team, fig.cap = "Red zone EPA per play generated by each offense (x) and allowed by each defense (y, inverted)."}
+fig(P2, "scatter_rz_epa_per_play")
+```
+
+```{r run-pass, fig.cap = "Offensive red zone EPA per rush (x) versus per pass (y)."}
+fig(P2, "scatter_rz_rush_vs_pass_epa")
+```
+
+## Fourth-down decisions
+
+Figure \@ref(fig:fourth-chart) shows the model's recommendation over the grid of red zone fourth-down situations, expressed as the expected-point gain from going for it. Of the `r int(fs$n)` red zone fourth downs in quarters 1-3, teams went for it on `r pct(fs$go_rate)`, while the model recommends going for it on `r pct(fs$model_go)`. Teams' decisions agreed with the model `r pct(fs$agreement)` of the time, and the disagreements sum to `r num(fs$ev_lost, 1)` expected points across FBS. Figure \@ref(fig:fourth-lost) ranks teams by expected points forgone. Given the model's simplifications, these team-level totals should be treated as indicative.
+
+```{r fourth-chart, fig.cap = "Expected points gained by going for it rather than attempting a field goal, by yards to goal and yards to go. Positive values (green) favor going for it."}
+fig(P2, "tile_fourth_down_chart")
+```
+
+```{r fourth-lost, out.width = "80%", fig.cap = "Expected points forgone on red zone fourth downs relative to the model's recommendation, top 30 teams (quarters 1-3)."}
+fig(P2, "bar_fourth_down_ev_lost")
+```
+
+## Turnovers and negative plays
+
+Figure \@ref(fig:outcomes-all) shows how every offense's red zone trips end, including missed field goals, turnovers and turnovers on downs. Figure \@ref(fig:negative) relates the share of red zone snaps losing yardage to touchdown rate; the correlation is `r num(neg$estimate)` (*p* `r pval(neg$p.value)`). This association is consistent with negative plays being a mechanism behind field goals rather than only play-calling preference, although the data cannot establish causation.
+
+```{r outcomes-all, out.width = "75%", fig.cap = "Distribution of red zone trip outcomes for every FBS offense, sorted by touchdown rate."}
+fig(P2, "bar_rz_outcomes_all_teams")
+```
+
+```{r negative, fig.cap = "Share of red zone snaps losing yardage versus red zone touchdown rate, by offense, with a least-squares fit and 95% confidence band."}
+fig(P2, "scatter_negative_plays_vs_td_rate")
+```
+
+## Weekly monitoring: Week `r lw`
+
+Across the `r int(hl_week$trips)` red zone trips in week `r lw`, offenses scored touchdowns on `r pct(hl_week$td_rate)`, compared with `r pct(hl_prior$td_rate)` in earlier weeks. Figure \@ref(fig:week-leaders) shows the team-games with the largest and smallest point totals over expected. Because a single game contributes only a handful of trips, these values are best read as descriptive.
+
+```{r week-leaders, fig.cap = paste0("Red zone points over expected by team-game in week ", lw, ": the ", "largest and smallest totals.")}
+fig(P3, paste0("bar_week", lw, "_poe_leaders"))
+```
+
+Figure \@ref(fig:movers) reports the inferentially preferable quantity: the change in each team's schedule-adjusted net POE rating after adding week `r lw`, with the penalty held fixed. The largest increase was `r top_up$team` (`r num(top_up$delta, 3)` points per trip) and the largest decrease `r top_down$team` (`r num(top_down$delta, 3)`). The standard deviation of changes across teams is `r num(sd(mv$delta, na.rm = TRUE), 3)`, compared with a spread of ratings of `r num(sd(mv$net_now, na.rm = TRUE), 3)`; `r if (sd(mv$delta, na.rm = TRUE) < 0.5 * sd(mv$net_now, na.rm = TRUE)) "the week therefore moved ratings modestly, the expected behavior of a stable rating system" else "a single week therefore still moves ratings substantially, indicating that the ratings have not yet stabilized"`. In week `r lw`, `r int(nrow(gls))` trips reached the 5-yard line or closer without producing a touchdown.
+
+```{r movers, fig.cap = paste0("Change in schedule-adjusted net red zone POE per trip after week ", lw, ". Gray points mark the rating before the week; logos mark the rating after. Both fits use the same penalty.")}
+fig(P3, paste0("arrow_week", lw, "_movers"))
+```
+
+## Season trends
+
+Figure \@ref(fig:league-week) traces league-wide trip outcomes by week, with 95% binomial bands. Week-to-week movements within the bands are consistent with sampling variation. Figure \@ref(fig:cumulative) shows each offense's cumulative POE, which reads as a running tally of points gained or lost relative to the opportunities created. Figure \@ref(fig:recent-form) compares shrunk POE per trip in the last `r r3$recent_n` weeks (weeks `r min(r3$recent_weeks)`-`r max(r3$recent_weeks)`) with earlier weeks, for teams with at least `r r3$min_recent_trips` recent trips.
+
+```{r league-week, fig.cap = "Share of FBS red zone trips ending in touchdowns, field goals and no points, by week. Shaded bands are 95% binomial intervals; the latest week is highlighted."}
+fig(P3, "line_league_outcomes_by_week")
+```
+
+```{r cumulative, fig.cap = "Cumulative offensive red zone points over expected by week. Highlighted lines identify selected teams; gray lines show all other FBS offenses."}
+fig(P3, "line_cumulative_poe")
+```
+
+```{r recent-form, fig.cap = paste0("Offensive red zone POE per trip in the last ", r3$recent_n, " weeks versus earlier weeks, each shrunk toward zero with ", r3$shrink_k, " pseudo-trips. Largest improvements and declines shown.")}
+fig(P3, "arrow_recent_form")
+```
+
+`r if (!is.null(r2$prior_season)) paste0("## Prior-season predictive validity\n\nUsing the prior season, adding early-season red zone POE to a model of later-season scoring margin that already contains offensive and defensive EPA per play changed the adjusted $R^2$ from ", num(r2$prior_season$adj_r2_base, 3), " to ", num(r2$prior_season$adj_r2_rz, 3), " (nested *F*-test *p* ", pval(r2$prior_season$anova_p), ").\n") else ""`
+
+# Discussion
+
+Three findings recur across the analyses. First, measurement choices matter before any modeling: the conventional end-of-drive definition misclassifies `r int(long_tds + backed_out)` drives, mostly by crediting long touchdowns to red zone finishing. Second, red zone touchdown rate is a noisy team measure at the sample sizes available within a season. Its reliability is well below that of overall efficiency, and both empirical Bayes shrinkage and ridge adjustment compress the observed spread substantially. Analysts and media should therefore treat extreme early-season red zone rates as weak evidence. Third, decomposing scoring shows that red zone *access*, the ability to reach the 20, and red zone *finishing* are distinct, and their relative contributions to scoring differences can be measured directly rather than inferred from touchdown rates.
+
+Points over expected offers a practical replacement for touchdown rate: it is on an interpretable scale (points per trip), removes the field-position component of red zone outcomes, and can be adjusted for schedule with the same machinery. For weekly reporting, the change in a schedule-adjusted rating under a fixed penalty provides a disciplined answer to "what did we learn this week?" that avoids over-reading single-game results.
+
+## Limitations
+
+Several limitations qualify these results. The expected points model conditions only on entry yard line and down; it omits distance, score, time and team strength, so POE attributes some situational effects to teams. Trips within a team-game are not independent, so nominal uncertainty is understated. The garbage-time rule is a simple margin threshold. Play-type classification depends on CFBD labels, and penalty plays are handled by exclusion rules that may misclassify a small number of snaps. The fourth-down model ignores game state and kicker quality. Leaderboard figures display extremes selected from many teams and are subject to regression to the mean. Finally, all associations reported here are descriptive; none support causal claims about play-calling.
+
+## Future work
+
+Natural extensions include a richer expected points model (distance, score, time and pre-game team strength), hierarchical models that pool information across seasons, play-level adjusted ratings that use the larger number of snaps, and out-of-sample validation of red zone metrics against future scoring margin across multiple seasons.
+
+# Data and Code Availability
+
+Data are publicly available from CollegeFootballData.com (a free API key is required). The analysis is implemented in four R scripts: `00_01_cfb_functions.R` (shared data access, definitions, models and plotting), `02_01_cfb_red_zone_success.R`, `02_02_cfb_red_zone_extended.R` and `02_03_cfb_red_zone_weekly.R`. This manuscript is generated by `03_01_cfb_red_zone_report.Rmd` from results and figures saved by those scripts. Weekly data snapshots are cached so that results can be reproduced exactly.
+
+# References {-}
+
+<div id="refs"></div>
+
+# (APPENDIX) Appendix {-}
+
+# Figure Sources
+
+```{r figure-sources}
+tribble(
+  ~Figure, ~Script, ~File,
+  "Expected points by entry", "02_02", "line_expected_points_by_entry",
+  "Raw / adjusted points scatter", "02_01", "scatter_offense_defense_sores(_adj)",
+  "Net points bars", "02_01", "column_net_team_points_meancentered(_adj)",
+  "TD rate matrix", "02_01", "scatter_offense_defense_td_pct(_adj)",
+  "Touchdown vs field goal", "02_01", "dumbell_red_zone_finishing",
+  "Volume vs efficiency", "02_01", "scatter_volume_efficiency",
+  "Outcome distribution", "02_01", "columns_outcome_distribution",
+  "TD ratio", "02_01", "lollipop_redzone_ratio",
+  "Points over expected", "02_02", "scatter_poe(_adj)",
+  "Reliability", "02_02", "bar_reliability",
+  "Shrinkage", "02_02", "scatter_td_rate_shrinkage",
+  "Access vs finishing", "02_02", "scatter_access_vs_finishing, bar_ppd_decomposition_offense",
+  "Play-level EPA", "02_02", "bar_league_epa_by_zone, scatter_rz_epa_per_play, scatter_rz_rush_vs_pass_epa",
+  "Fourth downs", "02_02", "tile_fourth_down_chart, bar_fourth_down_ev_lost",
+  "Outcomes and negative plays", "02_02", "bar_rz_outcomes_all_teams, scatter_negative_plays_vs_td_rate",
+  "Weekly leaders and movers", "02_03", paste0("bar_week", lw, "_poe_leaders, arrow_week", lw, "_movers"),
+  "Season trends", "02_03", "line_league_outcomes_by_week, line_cumulative_poe, arrow_recent_form"
+) |>
+  kable(caption = "Mapping of figures to analysis scripts and output files (prefix proj_012_02_0x_).")
+```
+
+# Model Details
+
+```{r model-details}
+tibble(
+  Model = c("Ridge, red zone points (02_01)", "Ridge, touchdown indicator (02_01)",
+            "Ridge, POE (02_02)", "Ridge, POE weekly (02_03)",
+            "Field goal success (logit): intercept, distance",
+            "Fourth-down conversion (logit): intercept, log(distance), goal-to-go, yards to goal"),
+  Value = c(paste("lambda =", signif(r1$lambda_points, 3)),
+            paste("lambda =", signif(r1$lambda_tds, 3)),
+            paste("lambda =", signif(r2$lambda_poe, 3)),
+            paste("lambda =", signif(r3$lambda_movers, 3)),
+            paste(num(r2$fg_model_coef, 3), collapse = ", "),
+            paste(num(r2$conv_model_coef, 3), collapse = ", "))
+) |>
+  kable(caption = "Selected penalty values and auxiliary model coefficients.")
+```
+
+# Session Information
+
+```{r session}
+sessionInfo()
+```
