@@ -18,7 +18,8 @@
 #
 # Notes ----
 # - Expects these objects from 00_00_dirs_libs_funs_vals.R:
-#     DIR_OUTPUTS, watermark_path, find_quadrant_whitespace()
+#     DIR_OUTPUTS, watermark_path
+#   (find_quadrant_whitespace() is now defined here; remove the old copy from 00_00)
 #   and optionally DIR_DATA (the cache goes there if it exists).
 # - Cache layout: <CFB_CACHE_DIR>/<kind>/<season>/<kind>_<season>_<type>_wkNN.rds
 #   Delete a file (or use overwrite_weeks) to re-pull that week.
@@ -31,7 +32,7 @@ library(ggpath)
 library(splines)
 
 # Cache Location ----
-CFB_CACHE_DIR <- if (exists("DIR_INPUTS")) file.path(DIR_INPUTS, "cfbd_cache") else file.path(DIR_OUTPUTS, "cfbd_cache")
+CFB_CACHE_DIR <- if (exists("DIR_DATA")) file.path(DIR_DATA, "cfbd_cache") else file.path(DIR_OUTPUTS, "cfbd_cache")
 dir.create(CFB_CACHE_DIR, showWarnings = FALSE, recursive = TRUE)
 
 # 1. Data Access ----
@@ -271,7 +272,10 @@ add_poe <- function(rz_df) {
 # plus a home term; ridge handles the collinearity. Returns adj_off / adj_def on
 # the outcome scale (points, or probability for binomial) at a neutral site vs.
 # an average opponent.
-fit_team_ridge <- function(df, y_col, family = c("gaussian", "binomial")) {
+# lambda: leave NULL to choose the penalty by cross-validation. Pass a value
+#   (e.g., attr(earlier_fit, "lambda")) to reuse a penalty, so two fits on
+#   different weeks are comparable. The chosen penalty is returned as attr "lambda".
+fit_team_ridge <- function(df, y_col, family = c("gaussian", "binomial"), lambda = NULL) {
   family <- match.arg(family)
   df <- df |> filter(!is.na(.data[[y_col]]))
   
@@ -285,9 +289,18 @@ fit_team_ridge <- function(df, y_col, family = c("gaussian", "binomial")) {
   # grid avoids that.
   lambda_grid <- if (family == "binomial") exp(seq(log(10), log(1e-5), length.out = 100)) else NULL
   
-  fit <- cv.glmnet(X, df[[y_col]], family = family, alpha = 0, standardize = FALSE, lambda = lambda_grid)
-  cf  <- coef(fit, s = "lambda.min")
-  cf  <- tibble(term = rownames(cf), coef = as.numeric(cf))
+  if (is.null(lambda)) {
+    fit <- cv.glmnet(X, df[[y_col]], family = family, alpha = 0, standardize = FALSE, lambda = lambda_grid)
+    lambda_used <- fit$lambda.min
+    cf <- coef(fit, s = "lambda.min")
+  } else {
+    # fit a short path ending at the requested lambda (more stable than a single value)
+    fit <- glmnet(X, df[[y_col]], family = family, alpha = 0, standardize = FALSE,
+                  lambda = lambda * c(100, 30, 10, 3, 1))
+    lambda_used <- lambda
+    cf <- coef(fit, s = lambda)
+  }
+  cf <- tibble(term = rownames(cf), coef = as.numeric(cf))
   
   intercept <- cf$coef[cf$term == "(Intercept)"]
   link_inv  <- if (family == "binomial") plogis else identity
@@ -299,11 +312,13 @@ fit_team_ridge <- function(df, y_col, family = c("gaussian", "binomial")) {
     filter(str_starts(term, "def::")) |>
     transmute(team = str_remove(term, "^def::"), def_coef = coef)
   
-  full_join(off_tbl, def_tbl, by = "team") |>
+  out <- full_join(off_tbl, def_tbl, by = "team") |>
     mutate(
       adj_off = link_inv(intercept + off_coef),
       adj_def = link_inv(intercept + def_coef)
     )
+  attr(out, "lambda") <- lambda_used
+  out
 }
 
 ## Empirical Bayes (beta-binomial) shrinkage of a rate ----
@@ -355,6 +370,113 @@ theme_rz <- function(base_size = 12, subtitle_size = 16) {
     )
 }
 
+## Find open space for a label in each quadrant ----
+# Replaces the version in 00_00 (this file is sourced after it, so this one wins).
+# Same inputs and outputs as before (quadrant, x, y), plus `hits` (points under
+# the label) and `fits` (whether the label fit inside its quadrant).
+#
+# How it avoids overlaps:
+#   1. Works in 0-1 "panel" units, so x and y distances are comparable.
+#   2. Each label must sit entirely inside its own quadrant, at least
+#      `center_buffer` away from the mean lines. Labels in neighboring
+#      quadrants therefore can never touch, even when both quadrants are
+#      emptiest near the mean.
+#   3. Each label is treated as a box (label_w x label_h), not a point. Within
+#      its quadrant, it picks the spot covering the fewest logos, then the one
+#      farthest from any logo, then the one farthest from the mean lines.
+#   4. Anything in `avoid` (e.g., the watermark) counts as an obstacle.
+#
+# reverse_y = TRUE when the plot uses scale_y_reverse(), so "Top" means the top
+# of the picture, not the largest y value.
+# label_w / label_h can be one number or a named vector by quadrant, in panel
+# units (0.20 = 20% of the panel width/height).
+find_quadrant_whitespace <- function(df, x_col, y_col,
+                                     x_mean = mean(df[[x_col]], na.rm = TRUE),
+                                     y_mean = mean(df[[y_col]], na.rm = TRUE),
+                                     reverse_y = FALSE,
+                                     label_w = 0.18, label_h = 0.09,
+                                     point_r = 0.02, center_buffer = 0.05, edge_buffer = 0.02,
+                                     avoid = NULL, avoid_r = 0.05,
+                                     expand = 0.05, grid_n = 30) {
+  x <- df[[x_col]]; y <- df[[y_col]]
+  keep <- is.finite(x) & is.finite(y)
+  x <- x[keep]; y <- y[keep]
+  
+  # panel limits, matching ggplot's default 5% expansion
+  xr <- range(c(x, x_mean)); yr <- range(c(y, y_mean))
+  xlo <- xr[1] - expand * diff(xr); xhi <- xr[2] + expand * diff(xr)
+  ylo <- yr[1] - expand * diff(yr); yhi <- yr[2] + expand * diff(yr)
+  
+  to_u   <- function(v) (v - xlo) / (xhi - xlo)
+  to_v   <- function(v) { t <- (v - ylo) / (yhi - ylo); if (reverse_y) 1 - t else t }
+  from_u <- function(u) xlo + u * (xhi - xlo)
+  from_v <- function(v) { t <- if (reverse_y) 1 - v else v; ylo + t * (yhi - ylo) }
+  
+  pu <- to_u(x); pv <- to_v(y)
+  obs_r <- rep(point_r, length(pu))
+  if (!is.null(avoid) && nrow(avoid) > 0) {
+    pu <- c(pu, to_u(avoid$x)); pv <- c(pv, to_v(avoid$y))
+    obs_r <- c(obs_r, rep(avoid_r, nrow(avoid)))
+  }
+  mu <- to_u(x_mean); mv <- to_v(y_mean)
+  
+  quads <- tribble(
+    ~quadrant,      ~u0,                ~u1,                ~v0,                ~v1,
+    "Top-Right",    mu + center_buffer, 1 - edge_buffer,    mv + center_buffer, 1 - edge_buffer,
+    "Top-Left",     edge_buffer,        mu - center_buffer, mv + center_buffer, 1 - edge_buffer,
+    "Bottom-Right", mu + center_buffer, 1 - edge_buffer,    edge_buffer,        mv - center_buffer,
+    "Bottom-Left",  edge_buffer,        mu - center_buffer, edge_buffer,        mv - center_buffer
+  )
+  
+  size_for <- function(val, q) if (!is.null(names(val)) && q %in% names(val)) val[[q]] else val[[1]]
+  
+  pmap_dfr(quads, function(quadrant, u0, u1, v0, v1) {
+    lw <- size_for(label_w, quadrant); lh <- size_for(label_h, quadrant)
+    
+    # range of label centers that keep the whole box inside the quadrant
+    cu_rng <- c(u0 + lw / 2, u1 - lw / 2)
+    cv_rng <- c(v0 + lh / 2, v1 - lh / 2)
+    fits <- cu_rng[1] <= cu_rng[2] && cv_rng[1] <= cv_rng[2]
+    if (cu_rng[1] > cu_rng[2]) cu_rng <- rep(mean(c(u0, u1)), 2)
+    if (cv_rng[1] > cv_rng[2]) cv_rng <- rep(mean(c(v0, v1)), 2)
+    
+    cand <- expand_grid(cu = seq(cu_rng[1], cu_rng[2], length.out = grid_n),
+                        cv = seq(cv_rng[1], cv_rng[2], length.out = grid_n)) |>
+      distinct()
+    
+    score <- map2_dfr(cand$cu, cand$cv, function(cu, cv) {
+      gap_u <- abs(pu - cu) - lw / 2 - obs_r
+      gap_v <- abs(pv - cv) - lh / 2 - obs_r
+      tibble(
+        hits      = sum(gap_u < 0 & gap_v < 0),
+        clearance = if (length(pu)) min(pmax(gap_u, gap_v)) else 1
+      )
+    })
+    
+    best <- bind_cols(cand, score) |>
+      mutate(
+        clearance_capped = pmin(clearance, 0.08),          # beyond this, "open enough"
+        outward          = abs(cu - mu) + abs(cv - mv)     # prefer away from the mean lines
+      ) |>
+      arrange(hits, desc(clearance_capped), desc(outward)) |>
+      slice(1)
+    
+    tibble(quadrant = quadrant, x = from_u(best$cu), y = from_v(best$cv),
+           hits = best$hits, fits = fits)
+  })
+}
+
+## Rough label box size in panel units, from the label text ----
+# Tuned for size-3 bold text on an ~11.5 x 7 inch plot; scale with label_size.
+estimate_label_box <- function(labels, label_size = 3, char_w = 0.0075, line_h = 0.03, pad = 0.02) {
+  lines <- str_split(labels, "\n")
+  scale <- label_size / 3
+  tibble(
+    w = map_dbl(lines, \(l) max(nchar(l))) * char_w * scale + pad,
+    h = map_int(lines, length) * line_h * scale + pad
+  )
+}
+
 ## Logo scatter with mean lines and optional quadrant labels ----
 # quadrant_labels: tibble(quadrant, label, color), where quadrant matches the
 #   names returned by find_quadrant_whitespace() ("Top-Right", "Bottom-Left", ...).
@@ -385,14 +507,24 @@ plot_logo_quadrant <- function(df, x, y, title, subtitle = NULL, x_lab = x, y_la
     theme_rz()
   
   if (!is.null(quadrant_labels)) {
-    pos <- find_quadrant_whitespace(df = df, x_col = x, y_col = y, x_mean = x_mean, y_mean = y_mean) |>
-      as_tibble() |>
-      select(quadrant, lx = x, ly = y)
-    lab <- inner_join(quadrant_labels, pos, by = "quadrant")
+    box <- estimate_label_box(quadrant_labels$label, label_size)
+    pos <- find_quadrant_whitespace(
+      df = df, x_col = x, y_col = y, x_mean = x_mean, y_mean = y_mean,
+      reverse_y = reverse_y,
+      label_w = set_names(box$w, quadrant_labels$quadrant),
+      label_h = set_names(box$h, quadrant_labels$quadrant),
+      avoid = tibble(x = wm_x, y = wm_y)          # keep labels off the watermark
+    )
+    if (any(pos$hits > 0 & pos$quadrant %in% quadrant_labels$quadrant)) {
+      message("Quadrant labels overlap logos in: ",
+              paste(pos$quadrant[pos$hits > 0], collapse = ", "),
+              ". Try shorter labels or a smaller label_size.")
+    }
+    lab <- inner_join(quadrant_labels, select(pos, quadrant, lx = x, ly = y), by = "quadrant")
     p <- p +
       geom_text(data = lab, aes(x = lx, y = ly, label = label, colour = color),
                 inherit.aes = FALSE, fontface = "bold", size = label_size,
-                alpha = label_alpha, hjust = 0.5, vjust = 0) +
+                alpha = label_alpha, hjust = 0.5, vjust = 0.5, lineheight = 0.9) +
       scale_colour_identity()
   }
   p
@@ -403,5 +535,5 @@ plot_logo_quadrant <- function(df, x, y, title, subtitle = NULL, x_lab = x, y_la
 save_plot <- function(p, name, width = 11.5, height = 7, prefix = OUT_PREFIX) {
   print(p)
   ggsave(plot = p, path = DIR_OUTPUTS, filename = paste0(prefix, name, ".png"),
-         width = width, height = height)
+         width = width, height = height, bg = "white")
 }
