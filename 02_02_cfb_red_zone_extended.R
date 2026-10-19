@@ -341,7 +341,7 @@ rz_plays <- rz$pbp |>
 rz_league <- rz_plays |>
   summarise(plays = n(), epa = mean(EPA), success_rate = mean(success, na.rm = TRUE),
             .by = c(zone, play_call)) |> 
-  mutate(zone = fct_na_value_to_level(zone, level = "Outside RZ (>20)"))
+  filter(!is.na(zone))
 print(rz_league)
 
 p <- ggplot(rz_league, aes(x = zone, y = epa, fill = play_call)) +
