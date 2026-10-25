@@ -221,10 +221,11 @@ p <- plot_logo_quadrant(
   subtitle = str_wrap("Offensive RZ Touchdown % Scored vs. Defensive RZ Touchdown % Allowed, Adjusted for Schedule Strength", 80),
   x_lab    = "Adjusted Offensive RZ Touchdown Rate Scored",
   y_lab    = "Adjusted Defensive RZ Touchdown Rate Allowed (Inverted)",
-  caption  = str_wrap(
-    paste(CAP_DATA, CAP_RZ,
-          paste(CAP_RIDGE, "Values are the probability a red zone trip ends in a touchdown."), sep = "\n"),
-    130),
+  # wrap each caption line separately; str_wrap() on the pasted string merges the lines
+  caption  = paste(
+    str_wrap(CAP_DATA, 130), str_wrap(CAP_RZ, 130),
+    str_wrap(paste(CAP_RIDGE, "Values are the probability a red zone trip ends in a touchdown."), 130),
+    sep = "\n"),
   pct = TRUE, quadrant_labels = LABELS_ELITE, label_alpha = 0.6
 )
 save_plot(p, "scatter_offense_defense_td_pct_adj")
@@ -288,7 +289,7 @@ p <- ggplot(plot_outcomes, aes(x = pct, y = team, fill = outcome)) +
   labs(
     title = str_wrap("Red Zone Drive Outcome Distribution For The Top 40 Scoring Teams", 35),
     x = "Proportion of Red Zone Drives", y = NULL, fill = NULL,
-    caption = str_wrap(paste(CAP_DATA, CAP_RZ, sep = "\n"), 80)
+    caption = paste(str_wrap(CAP_DATA, 80), str_wrap(CAP_RZ, 80), sep = "\n")
   ) +
   theme_rz() +
   theme(legend.position = "top")

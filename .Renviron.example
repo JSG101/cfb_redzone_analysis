@@ -1,0 +1,7 @@
+# Copy to .Renviron (git-ignored), fill in, and restart R.
+# Google Cloud project that holds the cfb_redzone BigQuery dataset
+CFB_BQ_PROJECT=your-gcp-project-id
+# Optional: path to a service-account JSON key (leave blank to sign in with a browser)
+CFB_BQ_KEY=
+# For the app's chat agent (phase 4)
+ANTHROPIC_API_KEY=

@@ -4,3 +4,15 @@
 .Ruserdata
 02_99_cfb_redzone_file_move.R
 03_01_cfb_red_zone_report.html
+
+# Secrets: API keys and service-account files never go in the repo
+.Renviron
+.env
+*.json.key
+*service-account*.json
+*-credentials.json
+secrets/
+
+# Web app build/deploy artifacts
+rsconnect/
+app/data/
