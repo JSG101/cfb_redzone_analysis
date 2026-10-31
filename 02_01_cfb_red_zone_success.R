@@ -2,7 +2,8 @@
 #
 # Script name: 02_01_cfb_red_zone_success.R
 #
-# Purpose of script: Answer the question: for teams that make the red zone, how successful are they at scoring?
+# Purpose of script: Answer the questions: how often do teams get to (and allow) the red zone,
+#   and for teams that make the red zone, how successful are they at scoring?
 #
 # Location of script:
 #
@@ -10,6 +11,7 @@
 #
 # Date Created: 2026-09-17
 # Date Revised: 2026-10-11 (refactored to use 00_01_cfb_functions.R)
+#               2026-10-31 (added Plot 0: red zone trip tendencies and red zone vs. non-red zone scoring)
 #
 # Copyright (c) Japbir Gill, 2026
 # Email: Japbir.Gill@gmail.com
@@ -25,6 +27,10 @@
 # - Adjusted values come from ridge regression with full offense/defense
 #   indicators and a home-field term: neutral site vs. an average opponent.
 # - Data loads from the weekly cache; only weeks not yet saved hit the API.
+# - Plot 0 uses every analysis drive (rz$drives_clean), not just red zone trips.
+#   Trip rates are per drive rather than per game, so tempo doesn't inflate them.
+#   A non-red zone drive is any analysis drive with no snap inside the 20, so
+#   long TDs from outside the 20 count there.
 #
 
 rm(list = ls())
@@ -47,6 +53,25 @@ OUT_PREFIX     <- "proj_012_02_01_"
 CAP_DATA  <- "Data: cfbfastR, ggplot2, ggpath"
 CAP_RZ    <- "Red zone trip = drive with at least one snap inside the opponent's 20. End-of-half and garbage-time drives excluded."
 CAP_RIDGE <- "Ridge regression (L2) on 2026 red zone trips with offense, defense, and home-field terms; neutral site vs. an average opponent."
+CAP_NONRZ <- "Non-red zone drive = drive with no snap inside the opponent's 20 (includes long TDs from outside the 20)."
+
+# Plot 0 quadrant labels: offense = points per drive (x), y = share of those points from red zone trips
+LABELS_SOURCE_OFF <- tribble(
+  ~quadrant,      ~label,                         ~color,
+  "Top-Right",    "Methodical\nMarchers",         "#1b5e20",
+  "Bottom-Right", "Home Run\nHitters",            "#0d47a1",
+  "Top-Left",     "Inch by Inch,\nRarely a Mile", "#e65100",
+  "Bottom-Left",  "Hail Mary\nor Bust",           "#4a148c"
+)
+
+# Plot 0 quadrant labels: defense = points allowed per drive (x, lower is better)
+LABELS_SOURCE_DEF <- tribble(
+  ~quadrant,      ~label,                            ~color,
+  "Top-Left",     "Make 'Em\nEarn It",               "#1b5e20",
+  "Bottom-Left",  "Stingy, but the\nOdd Deep Shot",  "#0d47a1",
+  "Top-Right",    "Death by a\nThousand Cuts",       "#e65100",
+  "Bottom-Right", "Burned\nDeep",                    "#b71c1c"
+)
 
 # Quadrant labels (offense on x, defense inverted on y, so Top-Right = good on both)
 LABELS_TAILGATE <- tribble(
@@ -80,6 +105,28 @@ summarise_rz_side <- function(df, side) {
     mutate(
       pct_score = scores / trips,
       pct_td    = tds / trips
+    )
+}
+
+## All-drive summary for one side of the ball (Plot 0) ----
+# Every analysis drive, split into red zone trips and non-red zone drives.
+summarise_drive_side <- function(df, side) {
+  df |>
+    rename(team = all_of(side)) |>
+    summarise(
+      drives     = n(),
+      rz_trips   = sum(rz_trip),
+      pts_total  = sum(drive_points),
+      pts_rz     = sum(drive_points[rz_trip]),
+      pts_non_rz = sum(drive_points[!rz_trip]),
+      .by = team
+    ) |>
+    mutate(
+      trip_rate       = rz_trips / drives,
+      ppd             = pts_total / drives,
+      ppd_rz          = if_else(rz_trips > 0, pts_rz / rz_trips, NA_real_),
+      ppd_non_rz      = if_else(drives > rz_trips, pts_non_rz / (drives - rz_trips), NA_real_),
+      share_pts_rz    = if_else(pts_total > 0, pts_rz / pts_total, NA_real_)
     )
 }
 
@@ -145,11 +192,168 @@ team_rz <- full_join(
     ratio_td_drives = if_else(tds_def > 0, tds_off / tds_def, NA_real_)
   )
 
+## Red zone trip tendencies, all drives (Plot 0) ----
+drives_all <- rz$drives_clean
+
+# schedule-adjusted chance a drive reaches the red zone
+ratings_access <- fit_team_ridge(drives_all |> mutate(rz_trip = as.integer(rz_trip)),
+                                 "rz_trip", family = "binomial") |>
+  select(team, adj_off_trip_rate = adj_off, adj_def_trip_rate = adj_def)
+
+team_trip <- full_join(
+  summarise_drive_side(drives_all, "offense") |> rename_with(\(x) paste0(x, "_off"), -team),
+  summarise_drive_side(drives_all, "defense") |> rename_with(\(x) paste0(x, "_def"), -team),
+  by = "team"
+) |>
+  left_join(games_played, by = "team") |>
+  left_join(ratings_access, by = "team") |>
+  add_team_info() |>
+  filter(!is.na(drives_off), !is.na(drives_def)) |>
+  mutate(
+    trips_per_game_off = rz_trips_off / games,
+    trips_per_game_def = rz_trips_def / games
+  )
+
+# league by week: how often drives get there, and what each kind of drive is worth
+league_trip_week <- drives_all |>
+  summarise(
+    drives       = n(),
+    rz_trips     = sum(rz_trip),
+    trip_rate    = mean(rz_trip),
+    ppd_rz       = mean(drive_points[rz_trip]),
+    sd_rz        = sd(drive_points[rz_trip]),
+    ppd_non_rz   = mean(drive_points[!rz_trip]),
+    sd_non_rz    = sd(drive_points[!rz_trip]),
+    share_pts_rz = sum(drive_points[rz_trip]) / sum(drive_points),
+    .by = week
+  ) |>
+  arrange(week)
+
 ## Summary tables ----
+print(league_trip_week, n = 20)
+print(team_trip |> arrange(desc(trip_rate_off)) |>
+        select(team, drives_off, rz_trips_off, trip_rate_off, adj_off_trip_rate, ppd_off, share_pts_rz_off), n = 25)
+print(team_trip |> arrange(trip_rate_def) |>
+        select(team, drives_def, rz_trips_def, trip_rate_def, adj_def_trip_rate, ppd_def, share_pts_rz_def), n = 25)
 print(team_rz |> arrange(desc(avg_points_off)) |>
         select(team, trips_off, points_off, avg_points_off, adj_off_points), n = 50)
 print(team_rz |> arrange(avg_points_def) |>
         select(team, trips_def, points_def, avg_points_def, adj_def_points), n = 50)
+
+# Plot 0: Getting to the Red Zone ----
+
+## Offense vs defense red zone trip rate ----
+p <- plot_logo_quadrant(
+  team_trip, "trip_rate_off", "trip_rate_def",
+  title    = "Who Gets to the Red Zone, and Who Lets Opponents In?",
+  subtitle = "Share of Drives Reaching the Red Zone on Offense vs. Allowed on Defense, FBS 2026 Season To Date",
+  x_lab    = "Offensive Drives Reaching the Red Zone",
+  y_lab    = "Opponent Drives Reaching the Red Zone (Inverted)",
+  caption  = paste(CAP_DATA, CAP_RZ, "Rates are per drive, so fast- and slow-paced teams compare evenly.", sep = "\n"),
+  pct = TRUE, quadrant_labels = LABELS_TAILGATE
+)
+save_plot(p, "scatter_offense_defense_trip_rate")
+
+## Offense vs defense red zone trip rate, adjusted ----
+p <- plot_logo_quadrant(
+  team_trip, "adj_off_trip_rate", "adj_def_trip_rate",
+  title    = "Who Gets to the Red Zone, and Who Lets Opponents In?",
+  subtitle = "Share of Drives Reaching the Red Zone, Adjusted for Schedule Strength",
+  x_lab    = "Adjusted Offensive Drives Reaching the Red Zone",
+  y_lab    = "Adjusted Opponent Drives Reaching the Red Zone (Inverted)",
+  caption  = str_wrap(
+    paste(CAP_DATA, CAP_RZ,
+          "Ridge regression (L2) on all 2026 drives with offense, defense, and home-field terms; values are the probability a drive reaches the red zone at a neutral site vs. an average opponent."),
+    130),
+  pct = TRUE, quadrant_labels = LABELS_TAILGATE
+)
+save_plot(p, "scatter_offense_defense_trip_rate_adj")
+
+## League trend: how often drives get there, and how much scoring runs through it ----
+league_trip_long <- bind_rows(
+  league_trip_week |>
+    transmute(week, series = "Drives Reaching the Red Zone", value = trip_rate,
+              se = sqrt(trip_rate * (1 - trip_rate) / drives)),
+  league_trip_week |>
+    transmute(week, series = "Points Scored on Red Zone Trips", value = share_pts_rz, se = NA_real_)
+)
+
+p <- ggplot(league_trip_long, aes(x = week, y = value, color = series, fill = series)) +
+  geom_ribbon(data = \(d) filter(d, !is.na(se)),
+              aes(ymin = value - 1.96 * se, ymax = value + 1.96 * se), alpha = 0.15, color = NA) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 2.5) +
+  add_watermark(rng_pos(league_trip_long$week, 0.98), rng_pos(league_trip_long$value, 0.5)) +
+  scale_x_continuous(breaks = league_trip_week$week) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_color_manual(values = c("Drives Reaching the Red Zone" = "#336699",
+                                "Points Scored on Red Zone Trips" = "#2e7d32"),
+                     aesthetics = c("color", "fill")) +
+  labs(
+    title = "Is Everyone Still Knocking on the Door?",
+    subtitle = "FBS share of drives reaching the red zone, and share of all points scored on those trips, by week",
+    x = "Week", y = "Share", color = NULL, fill = NULL,
+    caption = paste(CAP_DATA, CAP_RZ,
+                    "Shaded band = normal week-to-week noise in the trip rate.", sep = "\n")
+  ) +
+  theme_rz(subtitle_size = 13) +
+  theme(legend.position = "top")
+save_plot(p, "line_league_trip_rate_by_week")
+
+## League trend: points per drive, red zone trips vs non-red zone drives ----
+league_ppd_long <- bind_rows(
+  league_trip_week |>
+    transmute(week, series = "Red Zone Trips", value = ppd_rz, se = sd_rz / sqrt(rz_trips)),
+  league_trip_week |>
+    transmute(week, series = "Non-Red Zone Drives", value = ppd_non_rz, se = sd_non_rz / sqrt(drives - rz_trips))
+) |>
+  mutate(series = factor(series, levels = c("Red Zone Trips", "Non-Red Zone Drives")))
+
+p <- ggplot(league_ppd_long, aes(x = week, y = value, color = series, fill = series)) +
+  geom_ribbon(aes(ymin = value - 1.96 * se, ymax = value + 1.96 * se), alpha = 0.15, color = NA) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 2.5) +
+  add_watermark(rng_pos(league_ppd_long$week, 0.98), rng_pos(league_ppd_long$value, 0.5)) +
+  scale_x_continuous(breaks = league_trip_week$week) +
+  scale_y_continuous(limits = c(0, NA)) +
+  scale_color_manual(values = c("Red Zone Trips" = "#2e7d32", "Non-Red Zone Drives" = "#c62828"),
+                     aesthetics = c("color", "fill")) +
+  labs(
+    title = "Location, Location, Location",
+    subtitle = "FBS points per drive on red zone trips vs. drives that never reach the 20, by week",
+    x = "Week", y = "Points per Drive", color = NULL, fill = NULL,
+    caption = paste(CAP_DATA, CAP_RZ, CAP_NONRZ,
+                    "Shaded band = normal week-to-week noise.", sep = "\n")
+  ) +
+  theme_rz() +
+  theme(legend.position = "top")
+save_plot(p, "line_league_points_per_drive_rz_vs_non_rz")
+
+## Where each offense's points come from ----
+p <- plot_logo_quadrant(
+  team_trip, "ppd_off", "share_pts_rz_off",
+  title    = "Marching Down the Field or Hitting Home Runs?",
+  subtitle = "Offensive Points per Drive vs. Share of Those Points Scored on Red Zone Trips",
+  x_lab    = "Offensive Points per Drive",
+  y_lab    = "Share of Points Scored on Red Zone Trips",
+  caption  = paste(CAP_DATA, CAP_RZ, CAP_NONRZ, sep = "\n"),
+  reverse_y = FALSE, quadrant_labels = LABELS_SOURCE_OFF, label_alpha = 0.7
+) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1))
+save_plot(p, "scatter_offense_points_source")
+
+## Where each defense's points allowed come from ----
+p <- plot_logo_quadrant(
+  team_trip, "ppd_def", "share_pts_rz_def",
+  title    = "Bend or Break?",
+  subtitle = "Points Allowed per Drive vs. Share of Those Points Allowed on Red Zone Trips",
+  x_lab    = "Points Allowed per Drive (Lower Is Better)",
+  y_lab    = "Share of Points Allowed on Red Zone Trips",
+  caption  = paste(CAP_DATA, CAP_RZ, CAP_NONRZ, sep = "\n"),
+  reverse_y = FALSE, quadrant_labels = LABELS_SOURCE_DEF, label_alpha = 0.7
+) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1))
+save_plot(p, "scatter_defense_points_source")
 
 # Plot 1: Average Points Scored ----
 
@@ -321,11 +525,15 @@ save_plot(p, "lollipop_redzone_ratio", width = 14, height = 20)
 saveRDS(
   list(
     season         = SEASON,
-    team_rz        = team_rz,
-    ratings_points = ratings_points,
-    ratings_tds    = ratings_tds,
-    lambda_points  = attr(ratings_points, "lambda"),
-    lambda_tds     = attr(ratings_tds, "lambda")
+    team_rz          = team_rz,
+    team_trip        = team_trip,
+    league_trip_week = league_trip_week,
+    ratings_points   = ratings_points,
+    ratings_tds      = ratings_tds,
+    ratings_access   = ratings_access,
+    lambda_points    = attr(ratings_points, "lambda"),
+    lambda_tds       = attr(ratings_tds, "lambda"),
+    lambda_access    = attr(ratings_access, "lambda")
   ),
   file.path(DIR_OUTPUTS, paste0(OUT_PREFIX, "results.rds"))
 )
