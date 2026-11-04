@@ -8,6 +8,7 @@
 #     2. Red zone table building (play-by-play definition of a red zone trip)
 #     3. Models (expected points, opponent-adjusted ridge ratings, shrinkage)
 #     4. Plot helpers (theme, logos, watermark, quadrant scatter, saving)
+#     5. One-pager page pieces (header band, notes panel, small text helpers)
 #
 # Author: Japbir Gill, MBA MSEd
 #
@@ -336,6 +337,90 @@ eb_shrink <- function(x, n) {
   out
 }
 
+## FBS percentile, 0-100 (midpoint ranks, so nobody is the "0th" or "100th") ----
+pctile <- function(x) 100 * (rank(x, na.last = "keep") - 0.5) / sum(!is.na(x))
+
+## Game one-pager metric set (02_05 preview, 02_06 review) ----
+# Every metric is "higher = better offense", so a defense ranks by the lowest
+# value allowed. level = the table the ridge model is fit on.
+RZ_METRICS <- tribble(
+  ~metric,   ~label,                       ~short,             ~level,  ~family,    ~y_col,         ~unit,
+  "access",  "Getting There (Trips/Drive)", "Trips per Drive",  "drive", "binomial", "rz_trip",      "pct",
+  "points",  "Points per Trip",             "Points per Trip",  "trip",  "gaussian", "drive_points", "num",
+  "td",      "Touchdown Rate",              "TD Rate",          "trip",  "binomial", "flag_td",      "pct",
+  "poe",     "Points Over Expected / Trip", "POE per Trip",     "trip",  "gaussian", "poe",          "signed",
+  "epa",     "EPA per Play Inside the 20",  "EPA per Play",     "play",  "gaussian", "EPA",          "signed",
+  "success", "Success Rate Inside the 20",  "Success Rate",     "play",  "binomial", "success",      "pct"
+)
+
+## Format a metric value for labels ----
+fmt_metric <- function(x, unit) {
+  case_when(
+    is.na(x)          ~ "-",
+    unit == "pct"     ~ scales::percent(x, accuracy = 1),
+    unit == "signed"  ~ sprintf("%+.2f", x),
+    TRUE              ~ sprintf("%.2f", x)
+  )
+}
+
+## Red zone plays: rush/pass snaps inside the 20 on analysis red zone trips ----
+# Carries the drive's offense, defense, home, and week so fit_team_ridge() can use it.
+build_rz_plays <- function(rz, rz_line = 20) {
+  rz$pbp |>
+    filter(is_scrimmage, is_rush_pass, yards_to_goal <= rz_line, !is.na(EPA)) |>
+    select(-any_of(c("offense", "defense", "home", "week"))) |>
+    inner_join(rz$prod_rz_drives |> select(drive_id, offense, defense, home, week), by = "drive_id")
+}
+
+## Opponent-adjusted ratings for every metric in RZ_METRICS ----
+# trips must already carry poe (add_poe()). max_week limits the data (e.g., to
+# rate teams before a given week). lambdas: a named list from a previous call's
+# attr(, "lambda"), to reuse each penalty so two fits are comparable.
+# Returns one row per team x metric with adj_off / adj_def on the outcome scale.
+fit_rz_ratings <- function(drives, trips, plays, max_week = Inf, lambdas = NULL) {
+  data_for <- list(
+    drive = drives |> filter(week <= max_week) |> mutate(rz_trip = as.integer(rz_trip)),
+    trip  = trips  |> filter(week <= max_week),
+    play  = plays  |> filter(week <= max_week)
+  )
+  fits <- pmap(RZ_METRICS, function(metric, level, family, y_col, ...) {
+    fit_team_ridge(data_for[[level]], y_col, family = family, lambda = lambdas[[metric]])
+  }) |>
+    set_names(RZ_METRICS$metric)
+  
+  out <- imap_dfr(fits, \(f, m) f |> select(team, adj_off, adj_def) |> mutate(metric = m))
+  attr(out, "lambda") <- map(fits, \(f) attr(f, "lambda"))
+  out
+}
+
+## Raw metric values for each team-game side (offense in one game) ----
+# Includes sides with zero red zone trips (trip and play metrics are then NA).
+rz_side_metrics <- function(drives, trips, plays) {
+  drives |>
+    summarise(drives = n(), rz_trips = sum(rz_trip), .by = c(game_id, week, offense, defense)) |>
+    left_join(
+      trips |>
+        summarise(tds = sum(flag_td), fgs = sum(flag_fg), empty = sum(flag_score == 0),
+                  pts_sum = sum(drive_points), poe_sum = sum(poe), .by = c(game_id, offense)),
+      by = c("game_id", "offense")
+    ) |>
+    left_join(
+      plays |>
+        summarise(plays = n(), epa_sum = sum(EPA), successes = sum(success, na.rm = TRUE),
+                  .by = c(game_id, offense)),
+      by = c("game_id", "offense")
+    ) |>
+    mutate(
+      across(c(tds, fgs, empty, pts_sum, poe_sum, plays, epa_sum, successes), \(v) coalesce(v, 0)),
+      access  = rz_trips / drives,
+      points  = if_else(rz_trips > 0, pts_sum / rz_trips, NA_real_),
+      td      = if_else(rz_trips > 0, tds / rz_trips, NA_real_),
+      poe     = if_else(rz_trips > 0, poe_sum / rz_trips, NA_real_),
+      epa     = if_else(plays > 0, epa_sum / plays, NA_real_),
+      success = if_else(plays > 0, successes / plays, NA_real_)
+    )
+}
+
 # 4. Plot Helpers ----
 
 team_info <- get_team_info() |> select(school, logo, conference)
@@ -539,4 +624,66 @@ save_plot <- function(p, name, width = 11.5, height = 7, prefix = OUT_PREFIX) {
   print(p)
   ggsave(plot = p, path = DIR_OUTPUTS, filename = paste0(prefix, name, ".png"),
          width = width, height = height, bg = "white")
+}
+
+# 5. One-Pager Page Pieces (02_05 preview, 02_06 review) ----
+
+## 1st, 2nd, 3rd, ... ----
+ordinal <- function(x) {
+  x <- round(x)
+  suffix <- if_else(x %% 100 %in% 11:13, "th",
+                    c("th", "st", "nd", "rd", rep("th", 6))[x %% 10 + 1])
+  paste0(x, suffix)
+}
+
+## Safe file name piece from a team name ----
+slug <- function(x) str_replace_all(str_to_lower(x), "[^a-z0-9]+", "_") |> str_remove_all("^_|_$")
+
+## Black or white text, whichever reads better on a fill color ----
+text_on <- function(col) {
+  rgb <- grDevices::col2rgb(col) / 255
+  lum <- 0.2126 * rgb[1, ] + 0.7152 * rgb[2, ] + 0.0722 * rgb[3, ]
+  if_else(lum > 0.6, "black", "white")
+}
+
+## Valid team color, else the default ----
+clean_color <- function(x, default = "#37474f") {
+  x <- if_else(is.na(x) | x == "", NA_character_, if_else(str_starts(x, "#"), x, paste0("#", x)))
+  ok <- !is.na(x) & str_detect(x, "^#[0-9A-Fa-f]{6}$")
+  if_else(ok, x, default)
+}
+
+## One-pager header band: both teams' colors and logos, three title lines ----
+# Left block and logo = first team (the away team), right = second team.
+page_header <- function(fill_left, fill_right, logo_left, logo_right, line1, line2, line3, band = "#212121") {
+  ink <- text_on(band)
+  ggplot() +
+    annotate("rect", xmin = 0, xmax = 1, ymin = 0, ymax = 1, fill = band) +
+    annotate("rect", xmin = 0, xmax = 0.15, ymin = 0, ymax = 1, fill = fill_left) +
+    annotate("rect", xmin = 0.85, xmax = 1, ymin = 0, ymax = 1, fill = fill_right) +
+    annotate("rect", xmin = 0, xmax = 1, ymin = 0, ymax = 0.06, fill = "white", alpha = 0.25) +
+    annotate("point", x = c(0.075, 0.925), y = 0.55, size = 19, shape = 21, fill = "white", color = "white") +
+    geom_from_path(data = tibble(x = c(0.075, 0.925), y = 0.55, path = c(logo_left, logo_right)),
+                   aes(x = x, y = y, path = path), width = 0.05) +
+    annotate("text", x = 0.5, y = 0.76, label = line1, color = ink, fontface = "bold", size = 8) +
+    annotate("text", x = 0.5, y = 0.47, label = line2, color = ink, size = 4.4) +
+    annotate("text", x = 0.5, y = 0.2, label = line3, color = ink, fontface = "italic", size = 2.8) +
+    add_watermark(0.835, 0.14, width = 0.03) +
+    scale_x_continuous(limits = c(0, 1), expand = c(0, 0)) +
+    scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+    theme_void()
+}
+
+## Text panel: a column of wrapped bullet lines ----
+notes_panel <- function(lines, title, wrap = 110, size = 3.1) {
+  wrapped <- map_chr(lines, \(l) str_wrap(l, wrap))
+  n_lines <- str_count(wrapped, "\n") + 1
+  y_top   <- -cumsum(c(0, head(n_lines, -1) + 0.6))
+  ggplot(tibble(y = y_top, label = paste0("\u2022 ", str_replace_all(wrapped, "\n", "\n   ")))) +
+    geom_text(aes(x = 0, y = y, label = label), hjust = 0, vjust = 1, size = size, lineheight = 0.95) +
+    scale_x_continuous(limits = c(0, 1), expand = c(0.01, 0)) +
+    scale_y_continuous(limits = c(min(y_top - n_lines) - 0.3, 0.3), expand = c(0, 0)) +
+    labs(title = title) +
+    theme_void() +
+    theme(plot.title = element_text(size = 13, face = "bold", hjust = 0))
 }
