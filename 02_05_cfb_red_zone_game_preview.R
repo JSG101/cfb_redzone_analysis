@@ -2,14 +2,14 @@
 #
 # Script name: 02_05_cfb_red_zone_game_preview.R
 #
-# Purpose of script: Pre-game red zone scouting report, one page per team per
-#   game, for the upcoming week. Each page lines a team up against this week's
-#   opponent on six opponent-adjusted red zone measures:
-#     1. Header: team colors, both logos, venue, sample sizes
-#     2. "When we have the ball": our offense vs. their defense (FBS percentiles)
-#     3. "When they have the ball": our defense vs. their offense
-#     4. Season ladder: every game so far, trips by outcome for and against
-#     5. Scouting notes: offensive and defensive identity, biggest edges, sample size
+# Purpose of script: Pre-game red zone scouting report, one page per game, for
+#   the upcoming week. Each page lines the two teams up on six opponent-adjusted
+#   red zone measures (away team on the left, home team on the right):
+#     1. Header: both teams' colors and logos, venue, sample sizes
+#     2. "When the away team has the ball": its offense vs. the home defense
+#     3. "When the home team has the ball": its offense vs. the away defense
+#     4. Season ladders: every game so far for each team, trips by outcome
+#     5. Scouting notes: each team's identity and biggest edge, sample size
 #   Pages are saved one PNG each, plus (optionally) one combined PDF for the week.
 #
 # Location of script:
@@ -57,14 +57,13 @@ REFRESH_SCHEDULE <- FALSE        # TRUE = re-pull the preview week's schedule
 RZ_LINE          <- 20
 GARBAGE_MARGIN   <- 28
 P5_CONFS         <- conferences_p5   # a game qualifies if either team is in one of these
-PAGES_FOR        <- "both"       # "both" = a page for each team in a qualifying game; "p5" = P5 teams only
-PAGE_TEAMS       <- NULL         # NULL = every qualifying team; or e.g. c("Ohio State", "Penn State")
+PAGE_TEAMS       <- NULL         # NULL = every qualifying game; or only games involving e.g. c("Ohio State", "Penn State")
 MIN_TRIPS        <- 8            # units with fewer red zone trips are flagged "thin sample"
 EDGE_GAP         <- 25           # percentile gap between two units to call it an edge in the notes
 IDENTITY_SPLIT   <- 50           # percentile that splits "good" and "poor" for the identity tags
 COMBINED_PDF     <- TRUE         # also write every page into one PDF for the week
 PAGE_W           <- 9            # page size in inches
-PAGE_H           <- 12
+PAGE_H           <- 15           # long page: both teams on one page
 SEED             <- 2026
 OUT_PREFIX       <- "proj_012_02_05_"
 
@@ -202,64 +201,19 @@ message(sprintf("%s: %d games on the schedule, %d with a P5 team, %d of those wi
 games <- games |> filter(has_p5, rated)
 if (nrow(games) == 0) stop("No qualifying games for ", wk_label, ".", call. = FALSE)
 
-pages <- bind_rows(
-  games |> mutate(team = home_team, opp = away_team, team_conf = home_conf,
-                  venue = if_else(neutral_site %in% TRUE, "vs.", "hosts")),
-  games |> mutate(team = away_team, opp = home_team, team_conf = away_conf,
-                  venue = if_else(neutral_site %in% TRUE, "vs.", "at"))
-) |>
-  filter(PAGES_FOR == "both" | team_conf %in% P5_CONFS) |>
-  filter(is.null(PAGE_TEAMS) | team %in% PAGE_TEAMS) |>
-  arrange(across(any_of("start_date")), game_label, team)
+pages <- games |>
+  filter(is.null(PAGE_TEAMS) | home_team %in% PAGE_TEAMS | away_team %in% PAGE_TEAMS) |>
+  arrange(across(any_of("start_date")), game_label)
 
-message(sprintf("Building %d preview pages", nrow(pages)))
+message(sprintf("Building %d game preview pages", nrow(pages)))
 
-## Season results by game, raw (for the ladder) ----
+## Season results by game, raw (for the ladders) ----
 side_games <- rz_side_metrics(rz$drives_clean, trips, plays)
 
 # Page Builder ----
-build_preview_page <- function(tm, op, venue, game_label) {
-  card_t <- team_card |> filter(team == tm)
-  card_o <- team_card |> filter(team == op)
-  col_t  <- card_t$color
-  col_o  <- card_o$color
-  if (col_t == col_o) col_o <- COL_DEFAULT   # keep the two sides apart when colors match
 
-  m_t <- team_metric |> filter(team == tm)
-  m_o <- team_metric |> filter(team == op)
-
-  ## Header ----
-  thin_t <- card_t$trips_off < MIN_TRIPS | card_t$trips_def < MIN_TRIPS
-  thin_o <- card_o$trips_off < MIN_TRIPS | card_o$trips_def < MIN_TRIPS
-  header <- page_header(
-    col_t, card_t$logo, card_o$logo,
-    line1 = str_to_upper(tm),
-    line2 = paste(venue, op, "\u00b7", wk_label, SEASON, "\u00b7 Red Zone Scouting Report"),
-    line3 = sprintf("Season to date through week %d \u00b7 %s: %d trips for, %d against \u00b7 %s: %d for, %d against",
-                    max(weeks_played), tm, card_t$trips_off, card_t$trips_def,
-                    op, card_o$trips_off, card_o$trips_def)
-  )
-
-  ## Butterflies ----
-  side_o <- m_t |>
-    select(metric, short, unit, left_pct = off_pct, left_val = adj_off) |>
-    inner_join(m_o |> select(metric, right_pct = def_pct, right_val = adj_def), by = "metric") |>
-    mutate(left_lab  = paste0(fmt_metric(left_val, unit), " \u00b7 ", ordinal(left_pct)),
-           right_lab = paste0(ordinal(right_pct), " \u00b7 ", fmt_metric(right_val, unit)))
-  side_d <- m_t |>
-    select(metric, short, unit, left_pct = def_pct, left_val = adj_def) |>
-    inner_join(m_o |> select(metric, right_pct = off_pct, right_val = adj_off), by = "metric") |>
-    mutate(left_lab  = paste0(fmt_metric(left_val, unit), " \u00b7 ", ordinal(left_pct)),
-           right_lab = paste0(ordinal(right_pct), " \u00b7 ", fmt_metric(right_val, unit)))
-
-  bf_off <- butterfly(side_o, paste("When", tm, "Has the Ball"),
-                      paste0(tm, " offense vs. ", op, " defense (value \u00b7 FBS percentile)"),
-                      col_t, col_o, paste(tm, "O"), paste(op, "D"))
-  bf_def <- butterfly(side_d, paste("When", op, "Has the Ball"),
-                      paste0(tm, " defense (allowed) vs. ", op, " offense"),
-                      col_t, col_o, paste(tm, "D"), paste(op, "O"))
-
-  ## Season ladder ----
+## Season ladder for one team ----
+season_ladder <- function(tm, col) {
   ladder <- bind_rows(
     side_games |> filter(offense == tm) |> mutate(opp = defense, side = "For"),
     side_games |> filter(defense == tm) |> mutate(opp = offense, side = "Against")
@@ -279,7 +233,8 @@ build_preview_page <- function(tm, op, venue, game_label) {
   y_max <- max(5, ladder |> filter(side == "For") |> summarise(t = sum(n), .by = week) |> pull(t))
   y_min <- min(-5, -(ladder |> filter(side == "Against") |> summarise(t = sum(n), .by = week) |> pull(t)))
 
-  p_ladder <- ggplot(ladder, aes(x = week, y = n_signed, fill = outcome)) +
+  p <- ggplot(ladder, aes(x = week, y = n_signed, fill = outcome)) +
+    annotate("rect", xmin = -Inf, xmax = Inf, ymin = 0, ymax = Inf, fill = col, alpha = 0.06) +
     geom_col(aes(group = outcome_stack), width = 0.7, position = position_stack(reverse = TRUE),
              data = \(d) filter(d, side == "For")) +
     geom_col(aes(group = outcome_stack), width = 0.7, alpha = 0.55, position = position_stack(reverse = TRUE),
@@ -287,13 +242,13 @@ build_preview_page <- function(tm, op, venue, game_label) {
     geom_hline(yintercept = 0, color = "gray20") +
     annotate("text", x = min(weeks_played) - 0.75, y = c(y_max, y_min),
              label = c(paste(tm, "trips"), "Trips allowed"), hjust = 0, vjust = c(1, 0),
-             size = 3, fontface = "bold", color = "gray30") +
+             size = 3, fontface = "bold", color = c(col, "gray30")) +
     scale_fill_manual(values = COL_OUTCOME) +
     scale_x_continuous(breaks = weeks_played, limits = c(min(weeks_played) - 0.8, max(weeks_played) + 0.6)) +
     scale_y_continuous(limits = c(y_min - 1.8, y_max + 0.5), labels = abs,
                        breaks = scales::breaks_pretty(6)) +
     labs(
-      title = "The Season So Far Inside the 20",
+      title = paste0(tm, ": The Season So Far Inside the 20"),
       subtitle = paste0("Red zone trips by outcome each game (raw counts): above the line = ", tm,
                         " offense, below = trips allowed. Logos = opponent."),
       x = "Week", y = "Red Zone Trips", fill = NULL
@@ -301,54 +256,94 @@ build_preview_page <- function(tm, op, venue, game_label) {
     theme_rz(base_size = 10, subtitle_size = 9) +
     theme(plot.title = element_text(size = 13), legend.position = "top", panel.grid.major.x = element_blank())
   if (nrow(ladder_games) > 0) {
-    p_ladder <- p_ladder +
-      geom_from_path(data = ladder_games, aes(x = week, y = y_min - 1.1, path = opp_logo),
-                     width = 0.045, inherit.aes = FALSE)
+    p <- p + geom_from_path(data = ladder_games, aes(x = week, y = y_min - 1.1, path = opp_logo),
+                            width = 0.04, inherit.aes = FALSE)
   }
+  p
+}
+
+## One page per game: away team on the left, home team on the right ----
+build_preview_page <- function(away, home, neutral, game_label) {
+  card_a <- team_card |> filter(team == away)
+  card_h <- team_card |> filter(team == home)
+  col_a  <- card_a$color
+  col_h  <- card_h$color
+  if (col_a == col_h) col_h <- COL_DEFAULT   # keep the two sides apart when colors match
+
+  m_a <- team_metric |> filter(team == away)
+  m_h <- team_metric |> filter(team == home)
+
+  ## Header ----
+  thin_a <- card_a$trips_off < MIN_TRIPS | card_a$trips_def < MIN_TRIPS
+  thin_h <- card_h$trips_off < MIN_TRIPS | card_h$trips_def < MIN_TRIPS
+  header <- page_header(
+    col_a, col_h, card_a$logo, card_h$logo,
+    line1 = str_to_upper(paste(away, if (neutral %in% TRUE) "vs." else "at", home)),
+    line2 = paste(wk_label, SEASON, "\u00b7 Red Zone Game Preview", if (neutral %in% TRUE) "\u00b7 Neutral Site" else ""),
+    line3 = sprintf("Season to date through week %d \u00b7 %s: %d trips for, %d against \u00b7 %s: %d for, %d against",
+                    max(weeks_played), away, card_a$trips_off, card_a$trips_def,
+                    home, card_h$trips_off, card_h$trips_def)
+  )
+
+  ## Butterflies (away always on the left) ----
+  side_a <- m_a |>
+    select(metric, short, unit, left_pct = off_pct, left_val = adj_off) |>
+    inner_join(m_h |> select(metric, right_pct = def_pct, right_val = adj_def), by = "metric") |>
+    mutate(left_lab  = paste0(fmt_metric(left_val, unit), " \u00b7 ", ordinal(left_pct)),
+           right_lab = paste0(ordinal(right_pct), " \u00b7 ", fmt_metric(right_val, unit)))
+  side_h <- m_a |>
+    select(metric, short, unit, left_pct = def_pct, left_val = adj_def) |>
+    inner_join(m_h |> select(metric, right_pct = off_pct, right_val = adj_off), by = "metric") |>
+    mutate(left_lab  = paste0(fmt_metric(left_val, unit), " \u00b7 ", ordinal(left_pct)),
+           right_lab = paste0(ordinal(right_pct), " \u00b7 ", fmt_metric(right_val, unit)))
+
+  bf_a <- butterfly(side_a, paste("When", away, "Has the Ball"),
+                    paste0(away, " offense vs. ", home, " defense (value \u00b7 FBS percentile)"),
+                    col_a, col_h, paste(away, "O"), paste(home, "D"))
+  bf_h <- butterfly(side_h, paste("When", home, "Has the Ball"),
+                    paste0(away, " defense (allowed) vs. ", home, " offense"),
+                    col_a, col_h, paste(away, "D"), paste(home, "O"))
+
+  ## Season ladders ----
+  p_ladder_a <- season_ladder(away, col_a)
+  p_ladder_h <- season_ladder(home, col_h) + theme(legend.position = "none")
 
   ## Scouting notes ----
   pct_of <- function(m, tm_metric, col) tm_metric[[col]][tm_metric$metric == m]
-  id_off_t <- identity_tag(pct_of("access", m_t, "off_pct"), pct_of("points", m_t, "off_pct"), IDENTITY_OFF)
-  id_def_t <- identity_tag(pct_of("access", m_t, "def_pct"), pct_of("points", m_t, "def_pct"), IDENTITY_DEF)
-  id_off_o <- identity_tag(pct_of("access", m_o, "off_pct"), pct_of("points", m_o, "off_pct"), IDENTITY_OFF)
-  id_def_o <- identity_tag(pct_of("access", m_o, "def_pct"), pct_of("points", m_o, "def_pct"), IDENTITY_DEF)
+  identity_line <- function(tm, mm) {
+    sprintf("%s offense: \"%s\" (getting there %s pct., cashing in %s). %s defense: \"%s\" (trips allowed %s, points allowed %s).",
+            tm, identity_tag(pct_of("access", mm, "off_pct"), pct_of("points", mm, "off_pct"), IDENTITY_OFF),
+            ordinal(pct_of("access", mm, "off_pct")), ordinal(pct_of("points", mm, "off_pct")),
+            tm, identity_tag(pct_of("access", mm, "def_pct"), pct_of("points", mm, "def_pct"), IDENTITY_DEF),
+            ordinal(pct_of("access", mm, "def_pct")), ordinal(pct_of("points", mm, "def_pct")))
+  }
 
-  gaps <- bind_rows(
-    side_o |> mutate(side = "o"),
-    side_d |> mutate(side = "d")
-  ) |>
+  # gap > 0 = the away unit rates higher; < 0 = the home unit does
+  gaps <- bind_rows(side_a |> mutate(side = "a"), side_h |> mutate(side = "h")) |>
     mutate(gap = left_pct - right_pct)
-  best  <- gaps |> slice_max(gap, n = 1, with_ties = FALSE)
-  worst <- gaps |> slice_min(gap, n = 1, with_ties = FALSE)
 
-  edge_line <- function(row, favorable) {
-    unit_t <- if (row$side == "o") paste0(tm, "'s offense") else paste0(tm, "'s defense")
-    unit_o <- if (row$side == "o") paste0(op, "'s defense") else paste0(op, "'s offense")
-    if (abs(row$gap) < EDGE_GAP) {
-      return(sprintf("%s: no gap of %d+ percentile points anywhere on the page. On paper, this one is even inside the 20.",
-                     if (favorable) "Biggest edge" else "Biggest worry", EDGE_GAP))
+  edge_line <- function(row, for_away) {
+    tm <- if (for_away) away else home
+    if (nrow(row) == 0 || abs(row$gap) < EDGE_GAP) {
+      return(sprintf("%s's biggest edge: no gap of %d+ percentile points in its favor. On paper, nothing jumps off the page.",
+                     tm, EDGE_GAP))
     }
-    if (favorable) {
-      sprintf("Biggest edge: %s (%s percentile) vs. %s (%s) in %s. On paper, %s has been the better unit by %d points.",
-              unit_t, ordinal(row$left_pct), unit_o, ordinal(row$right_pct), row$short,
-              unit_t, round(row$gap))
-    } else {
-      sprintf("Biggest worry: %s (%s percentile) vs. %s (%s) in %s. On paper, %s has been the better unit by %d points.",
-              unit_t, ordinal(row$left_pct), unit_o, ordinal(row$right_pct), row$short,
-              unit_o, round(-row$gap))
-    }
+    unit_a <- if (row$side == "a") paste0(away, "'s offense") else paste0(away, "'s defense")
+    unit_h <- if (row$side == "a") paste0(home, "'s defense") else paste0(home, "'s offense")
+    sprintf("%s's biggest edge: %s (%s percentile) vs. %s (%s) in %s. On paper, %s has been the better unit by %d points.",
+            tm, unit_a, ordinal(row$left_pct), unit_h, ordinal(row$right_pct), row$short,
+            if (for_away) unit_a else unit_h, round(abs(row$gap)))
   }
 
   notes <- c(
-    sprintf("%s offense: \"%s\" (getting there %s pct., cashing in %s). %s defense: \"%s\" (trips allowed %s, points allowed %s).",
-            tm, id_off_t, ordinal(pct_of("access", m_t, "off_pct")), ordinal(pct_of("points", m_t, "off_pct")),
-            tm, id_def_t, ordinal(pct_of("access", m_t, "def_pct")), ordinal(pct_of("points", m_t, "def_pct"))),
-    sprintf("Across the field, %s brings \"%s\" on offense and \"%s\" on defense.", op, id_off_o, id_def_o),
-    edge_line(best, TRUE),
-    edge_line(worst, FALSE),
-    if (thin_t || thin_o) {
-      sprintf("Small-sample alert: %s has fewer than %d red zone trips on one side of the ball, so its ratings lean on the league average.",
-              paste(c(tm, op)[c(thin_t, thin_o)], collapse = " and "), MIN_TRIPS)
+    identity_line(away, m_a),
+    identity_line(home, m_h),
+    edge_line(gaps |> slice_max(gap, n = 1, with_ties = FALSE), TRUE),
+    edge_line(gaps |> slice_min(gap, n = 1, with_ties = FALSE), FALSE),
+    if (thin_a || thin_h) {
+      sprintf("Small-sample alert: %s %s fewer than %d red zone trips on one side of the ball, so those ratings lean on the league average.",
+              paste(c(away, home)[c(thin_a, thin_h)], collapse = " and "),
+              if (thin_a && thin_h) "have" else "has", MIN_TRIPS)
     } else {
       "Red zone samples are small all season (a few trips a game), so read a 10-point percentile gap as a nudge, not a verdict."
     }
@@ -356,8 +351,8 @@ build_preview_page <- function(tm, op, venue, game_label) {
   p_notes <- notes_panel(notes, "Scouting Notes")
 
   ## Assemble ----
-  header / (bf_off | bf_def) / p_ladder / p_notes +
-    plot_layout(heights = c(1.15, 3.1, 2.9, 1.5)) +
+  header / (bf_a | bf_h) / p_ladder_a / p_ladder_h / p_notes +
+    plot_layout(heights = c(1.15, 3.1, 2.7, 2.5, 1.7)) +
     plot_annotation(
       caption = paste(CAP_DATA, CAP_RZ, CAP_RIDGE, CAP_PCT,
                       "Bars: solid = the unit that rates higher by at least 25 percentile points; POE = points over expected given where the trip started.",
@@ -371,9 +366,9 @@ page_files <- character(0)
 page_list  <- vector("list", nrow(pages))
 for (i in seq_len(nrow(pages))) {
   pg <- pages[i, ]
-  p  <- build_preview_page(pg$team, pg$opp, pg$venue, pg$game_label)
+  p  <- build_preview_page(pg$away_team, pg$home_team, pg$neutral_site, pg$game_label)
   page_list[[i]] <- p
-  name <- paste0("week", PREVIEW_WEEK, "_preview_", slug(pg$team), "_vs_", slug(pg$opp))
+  name <- paste0("week", PREVIEW_WEEK, "_preview_", slug(pg$away_team), "_at_", slug(pg$home_team))
   save_plot(p, name, width = PAGE_W, height = PAGE_H)
   page_files <- c(page_files, paste0(OUT_PREFIX, name, ".png"))
 }

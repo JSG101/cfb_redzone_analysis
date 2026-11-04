@@ -33,8 +33,8 @@ Results are associations, not causal claims about play-calling. Red zone samples
 | `02_01_cfb_red_zone_success.R` | Core team view: red zone points and TD rates, raw and schedule-adjusted, net rankings and outcome charts. |
 | `02_02_cfb_red_zone_extended.R` | Extended analyses: definition check, POE, reliability, shrinkage, scoring decomposition, play-level EPA, fourth downs, negative plays, optional prior-season validation. |
 | `02_03_cfb_red_zone_weekly.R` | Weekly review: latest-week POE leaders, rating movers, goal-line stands, season trends, recent form. |
-| `02_05_cfb_red_zone_game_preview.R` | Pre-game one-pager per team per game (games with a P5 team): opponent-adjusted offense vs. defense on six red zone measures, season ladder, scouting notes. Descriptive, not a forecast. |
-| `02_06_cfb_red_zone_game_review.R` | Post-game one-pager per team per game: report card with opponent-adjusted game values and letter grades, every trip inside the 20, before/after rating moves. |
+| `02_05_cfb_red_zone_game_preview.R` | Pre-game page per game (games with a P5 team): both teams' opponent-adjusted offense vs. defense on six red zone measures, season ladders, scouting notes. Descriptive, not a forecast. |
+| `02_06_cfb_red_zone_game_review.R` | Post-game page per game: report card for both offenses and defenses with opponent-adjusted game values and letter grades, every trip inside the 20, before/after rating moves. |
 | `03_01_cfb_red_zone_report.Rmd` | The manuscript (bookdown). Reads each script's `results.rds` and saved figures. |
 
 ## Data

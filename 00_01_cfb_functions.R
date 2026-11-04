@@ -653,19 +653,22 @@ clean_color <- function(x, default = "#37474f") {
   if_else(ok, x, default)
 }
 
-## One-pager header band: team colors, both logos, three title lines ----
-page_header <- function(fill, logo_team, logo_opp, line1, line2, line3) {
-  ink <- text_on(fill)
+## One-pager header band: both teams' colors and logos, three title lines ----
+# Left block and logo = first team (the away team), right = second team.
+page_header <- function(fill_left, fill_right, logo_left, logo_right, line1, line2, line3, band = "#212121") {
+  ink <- text_on(band)
   ggplot() +
-    annotate("rect", xmin = 0, xmax = 1, ymin = 0, ymax = 1, fill = fill) +
-    annotate("rect", xmin = 0, xmax = 1, ymin = 0, ymax = 0.06, fill = ink, alpha = 0.25) +
-    annotate("point", x = c(0.07, 0.93), y = 0.55, size = 19, shape = 21, fill = "white", color = ink, stroke = 1) +
-    geom_from_path(data = tibble(x = c(0.07, 0.93), y = 0.55, path = c(logo_team, logo_opp)),
+    annotate("rect", xmin = 0, xmax = 1, ymin = 0, ymax = 1, fill = band) +
+    annotate("rect", xmin = 0, xmax = 0.15, ymin = 0, ymax = 1, fill = fill_left) +
+    annotate("rect", xmin = 0.85, xmax = 1, ymin = 0, ymax = 1, fill = fill_right) +
+    annotate("rect", xmin = 0, xmax = 1, ymin = 0, ymax = 0.06, fill = "white", alpha = 0.25) +
+    annotate("point", x = c(0.075, 0.925), y = 0.55, size = 19, shape = 21, fill = "white", color = "white") +
+    geom_from_path(data = tibble(x = c(0.075, 0.925), y = 0.55, path = c(logo_left, logo_right)),
                    aes(x = x, y = y, path = path), width = 0.05) +
-    annotate("text", x = 0.5, y = 0.76, label = line1, color = ink, fontface = "bold", size = 8.5) +
-    annotate("text", x = 0.5, y = 0.47, label = line2, color = ink, size = 4.6) +
-    annotate("text", x = 0.5, y = 0.2, label = line3, color = ink, fontface = "italic", size = 3.1) +
-    add_watermark(0.985, 0.14, width = 0.035) +
+    annotate("text", x = 0.5, y = 0.76, label = line1, color = ink, fontface = "bold", size = 8) +
+    annotate("text", x = 0.5, y = 0.47, label = line2, color = ink, size = 4.4) +
+    annotate("text", x = 0.5, y = 0.2, label = line3, color = ink, fontface = "italic", size = 2.8) +
+    add_watermark(0.835, 0.14, width = 0.03) +
     scale_x_continuous(limits = c(0, 1), expand = c(0, 0)) +
     scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
     theme_void()

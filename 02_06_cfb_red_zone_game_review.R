@@ -2,9 +2,9 @@
 #
 # Script name: 02_06_cfb_red_zone_game_review.R
 #
-# Purpose of script: Post-game red zone review, one page per team per game, for
-#   the most recent completed week. Each page grades a team's red zone game on
-#   the same six measures as the 02_05 preview:
+# Purpose of script: Post-game red zone review, one page per game, for the most
+#   recent completed week. Each page grades both teams' red zone game (offense
+#   and defense) on the same six measures as the 02_05 preview:
 #     1. Header: final score, team colors, both logos, the trip count
 #     2. Report card: game value, opponent-adjusted game value, season rating
 #        coming in, and a letter grade vs. every FBS offense/defense that week
@@ -60,12 +60,11 @@ RZ_LINE        <- 20
 GARBAGE_MARGIN <- 28
 DOORSTEP_YTG   <- 5            # notes: trips that got to this yard line or closer without a TD
 P5_CONFS       <- conferences_p5   # a game qualifies if either team is in one of these
-PAGES_FOR      <- "both"       # "both" = a page for each team in a qualifying game; "p5" = P5 teams only
-PAGE_TEAMS     <- NULL         # NULL = every qualifying team; or e.g. c("Ohio State", "Penn State")
+PAGE_TEAMS     <- NULL         # NULL = every qualifying game; or only games involving e.g. c("Ohio State", "Penn State")
 GRADE_CUTS     <- c(A = 80, B = 60, C = 40, D = 20)   # weekly percentile floor for each grade (below D = F)
 COMBINED_PDF   <- TRUE         # also write every page into one PDF for the week
 PAGE_W         <- 9            # page size in inches
-PAGE_H         <- 12
+PAGE_H         <- 17           # long page: both teams on one page
 SEED           <- 2026
 OUT_PREFIX     <- "proj_012_02_06_"
 
@@ -185,19 +184,11 @@ message(sprintf("%s: %d games, %d with a P5 team, %d of those with two rated FBS
 games <- games |> filter(has_p5, rated, game_id %in% week_sides$game_id)
 if (nrow(games) == 0) stop("No qualifying games for ", wk_label, ".", call. = FALSE)
 
-pages <- bind_rows(
-  games |> mutate(team = home_team, opp = away_team, team_conf = home_conf,
-                  pts_team = home_points, pts_opp = away_points,
-                  venue = "vs."),
-  games |> mutate(team = away_team, opp = home_team, team_conf = away_conf,
-                  pts_team = away_points, pts_opp = home_points,
-                  venue = if_else(neutral_site %in% TRUE, "vs.", "at"))
-) |>
-  filter(PAGES_FOR == "both" | team_conf %in% P5_CONFS) |>
-  filter(is.null(PAGE_TEAMS) | team %in% PAGE_TEAMS) |>
-  arrange(across(any_of("start_date")), game_id, team)
+pages <- games |>
+  filter(is.null(PAGE_TEAMS) | home_team %in% PAGE_TEAMS | away_team %in% PAGE_TEAMS) |>
+  arrange(across(any_of("start_date")), game_id)
 
-message(sprintf("Building %d review pages", nrow(pages)))
+message(sprintf("Building %d game review pages", nrow(pages)))
 
 ## Trip log for the week (analysis red zone trips) ----
 closest <- rz$pbp |>
@@ -214,44 +205,65 @@ trip_log <- trips |>
   select(game_id, offense, defense, start_period, seq, rz_entry_ytg, min_ytg, drive_points, outcome, rz_outcome, xpts)
 
 # Page Builder ----
-build_review_page <- function(gid, tm, op, venue, pts_team, pts_opp) {
-  card_t <- team_card |> filter(team == tm)
-  card_o <- team_card |> filter(team == op)
-  col_t  <- card_t$color
-  col_o  <- card_o$color
-  if (col_t == col_o) col_o <- COL_DEFAULT
 
-  s_off <- side_long |> filter(game_id == gid, offense == tm)
-  s_def <- side_long |> filter(game_id == gid, defense == tm)
-  side_off <- week_sides |> filter(game_id == gid, offense == tm)
-  side_def <- week_sides |> filter(game_id == gid, defense == tm)
+## Report card rows for one team (its offense and its defense in this game) ----
+card_rows <- function(gid, tm, op) {
+  before_t <- (if (has_before) ratings_before else ratings_after) |> filter(team == tm)
+  bind_rows(
+    side_long |>
+      filter(game_id == gid, offense == tm) |>
+      left_join(before_t |> select(metric, norm = adj_off), by = "metric") |>
+      transmute(team = tm, opp = op, side = "Offense", metric, game_val, adj_val = adj_for_off, norm,
+                better = adj_val - norm, grade = off_grade),
+    side_long |>
+      filter(game_id == gid, defense == tm) |>
+      left_join(before_t |> select(metric, norm = adj_def), by = "metric") |>
+      transmute(team = tm, opp = op, side = "Defense", metric, game_val, adj_val = adj_for_def, norm,
+                better = norm - adj_val, grade = def_grade)
+  )
+}
+
+## Stock watch rows for one team ----
+stock_rows <- function(tm) {
+  inner_join(
+    ratings_before |> filter(team == tm) |> select(metric, off_b = off_pct, def_b = def_pct),
+    ratings_after  |> filter(team == tm) |> select(metric, off_a = off_pct, def_a = def_pct),
+    by = "metric"
+  ) |>
+    pivot_longer(-metric, names_to = c("side", ".value"), names_pattern = "(off|def)_(.)") |>
+    mutate(team = tm, side = if_else(side == "off", "Offense", "Defense"))
+}
+
+## One page per game: away team first, home team second ----
+build_review_page <- function(gid, away, home, neutral, pts_away, pts_home) {
+  card_a <- team_card |> filter(team == away)
+  card_h <- team_card |> filter(team == home)
+  col_a  <- card_a$color
+  col_h  <- card_h$color
+  if (col_a == col_h) col_h <- COL_DEFAULT
+  teams  <- c(away, home)
+  unit_levels <- paste(rep(teams, each = 2), c("Offense", "Defense"))
+
+  side_of <- function(tm) week_sides |> filter(game_id == gid, offense == tm)
+  side_a <- side_of(away)
+  side_h <- side_of(home)
 
   ## Header ----
-  result <- case_when(pts_team > pts_opp ~ "W", pts_team < pts_opp ~ "L", TRUE ~ "T")
-  trip_txt <- function(s) sprintf("%d trip%s (%d TD, %d FG, %d empty)", s$rz_trips, if_else(s$rz_trips == 1, "", "s"), s$tds, s$fgs, s$empty)
+  trip_txt <- function(tm, s) sprintf("%s %d trip%s (%d TD, %d FG, %d empty)", tm, s$rz_trips,
+                                      if_else(s$rz_trips == 1, "", "s"), s$tds, s$fgs, s$empty)
   header <- page_header(
-    col_t, card_t$logo, card_o$logo,
-    line1 = sprintf("%s %s, %s %s", str_to_upper(tm), pts_team, op, pts_opp),
-    line2 = paste(result, "\u00b7", venue, op, "\u00b7", wk_label, SEASON, "\u00b7 Red Zone Game Review"),
-    line3 = sprintf("Inside the 20: %s for, %s against", trip_txt(side_off), trip_txt(side_def))
+    col_a, col_h, card_a$logo, card_h$logo,
+    line1 = sprintf("%s %s, %s %s", str_to_upper(away), pts_away, str_to_upper(home), pts_home),
+    line2 = paste(wk_label, SEASON, "\u00b7 Red Zone Game Review", if (neutral %in% TRUE) "\u00b7 Neutral Site" else ""),
+    line3 = paste("Inside the 20:", trip_txt(away, side_a), "\u00b7", trip_txt(home, side_h))
   )
 
   ## Report card ----
-  before_t <- if (has_before) ratings_before |> filter(team == tm) else ratings_after |> filter(team == tm)
-  card <- bind_rows(
-    s_off |>
-      left_join(before_t |> select(metric, norm = adj_off), by = "metric") |>
-      transmute(unit = paste(tm, "Offense"), metric, game_val, adj_val = adj_for_off, norm,
-                better = adj_val - norm, grade = off_grade),
-    s_def |>
-      left_join(before_t |> select(metric, norm = adj_def), by = "metric") |>
-      transmute(unit = paste(tm, "Defense"), metric, game_val, adj_val = adj_for_def, norm,
-                better = norm - adj_val, grade = def_grade)
-  ) |>
+  card <- bind_rows(card_rows(gid, away, home), card_rows(gid, home, away)) |>
     left_join(RZ_METRICS |> select(metric, short, unit_type = unit), by = "metric") |>
     mutate(
+      unit  = factor(paste(team, side), levels = unit_levels),
       short = factor(short, levels = rev(RZ_METRICS$short)),
-      unit  = factor(unit, levels = paste(tm, c("Offense", "Defense"))),
       vs_norm = case_when(is.na(better) ~ "-",
                           unit_type == "pct" ~ sprintf("%+.0f pts", 100 * better),
                           TRUE ~ sprintf("%+.2f", better)),
@@ -273,7 +285,7 @@ build_review_page <- function(gid, tm, op, venue, pts_team, pts_opp) {
     geom_text(data = card, aes(x = 5, y = short, label = grade,
                                color = if_else(grade %in% c("A", "F"), "white", "black")),
               inherit.aes = FALSE, fontface = "bold", size = 4.6) +
-    facet_wrap(~ unit, nrow = 1) +
+    facet_wrap(~ unit, ncol = 2, drop = FALSE) +
     scale_fill_manual(values = c(none = "gray96", up = "#c8e6c9", down = "#ffcdd2", COL_GRADE), guide = "none") +
     scale_color_identity() +
     scale_x_discrete(position = "top", limits = c(levels(card_cells$col), "Grade"), expand = expansion(add = 0.5)) +
@@ -285,26 +297,25 @@ build_review_page <- function(gid, tm, op, venue, pts_team, pts_opp) {
     theme_rz(base_size = 10, subtitle_size = 9) +
     theme(plot.title = element_text(size = 13), panel.grid = element_blank(),
           strip.text = element_text(face = "bold", size = 11), axis.text.y = element_text(face = "bold", size = 9),
-          axis.text.x.top = element_text(face = "bold", size = 8.5))
+          axis.text.x.top = element_text(face = "bold", size = 8.5), panel.spacing.y = unit(1, "lines"))
 
   ## Every trip inside the 20 ----
   tl <- trip_log |>
     filter(game_id == gid) |>
-    mutate(side = factor(if_else(offense == tm, paste(tm, "ball"), paste(op, "ball")),
-                         levels = paste(c(tm, op), "ball"))) |>
+    mutate(side = factor(paste(offense, "ball"), levels = paste(teams, "ball"))) |>
     arrange(seq) |>
     mutate(trip_no = row_number(), .by = side)
-  n_max <- max(4, nrow(tl |> filter(offense == tm)), nrow(tl |> filter(offense == op)))
+  n_max <- max(4, count(tl, side)$n)
 
   p_trips <- ggplot(tl, aes(x = trip_no, y = rz_entry_ytg)) +
     geom_hline(yintercept = DOORSTEP_YTG, linetype = "dotted", color = "gray50") +
-    # line = how far the trip got (entry to its closest snap)
+    # bar = how far the trip got (entry to its closest snap)
     geom_linerange(aes(ymin = pmin(min_ytg, rz_entry_ytg), ymax = rz_entry_ytg, color = outcome), linewidth = 2.2, alpha = 0.35) +
     geom_point(aes(fill = outcome), shape = 21, size = 7, color = "white", stroke = 0.8) +
     geom_text(aes(label = drive_points), color = "white", fontface = "bold", size = 3) +
     geom_text(aes(label = paste0("Q", pmin(start_period, 5) |> as.character() |> str_replace("5", "OT"))),
               nudge_y = -2.6, size = 2.4, color = "gray35") +
-    facet_wrap(~ side, ncol = 1, drop = FALSE) +
+    facet_wrap(~ side, nrow = 1, drop = FALSE) +
     scale_fill_manual(values = COL_OUTCOME, drop = FALSE) +
     scale_colour_manual(values = COL_OUTCOME, guide = "none") +
     scale_x_continuous(limits = c(0.4, n_max + 0.6), breaks = 1:n_max) +
@@ -314,22 +325,17 @@ build_review_page <- function(gid, tm, op, venue, pts_team, pts_opp) {
          x = "Red Zone Trip", y = "Entry: Yards to Goal", fill = NULL) +
     theme_rz(base_size = 10, subtitle_size = 9) +
     theme(plot.title = element_text(size = 13), legend.position = "top",
-          panel.grid.major.x = element_blank(), strip.text = element_text(face = "bold"))
+          panel.grid.major.x = element_blank(), strip.text = element_text(face = "bold", size = 11))
   if (nrow(tl) == 0) {
     p_trips <- p_trips + annotate("text", x = 2.5, y = 10, label = "No red zone trips either way", size = 4)
   }
 
   ## Stock watch ----
   if (has_before) {
-    stock <- inner_join(
-      ratings_before |> filter(team == tm) |> select(metric, off_b = off_pct, def_b = def_pct),
-      ratings_after  |> filter(team == tm) |> select(metric, off_a = off_pct, def_a = def_pct),
-      by = "metric"
-    ) |>
-      pivot_longer(-metric, names_to = c("unit", ".value"), names_pattern = "(off|def)_(.)") |>
+    stock <- bind_rows(stock_rows(away), stock_rows(home)) |>
       left_join(RZ_METRICS |> select(metric, short), by = "metric") |>
       mutate(
-        unit  = factor(if_else(unit == "off", "Offense", "Defense"), levels = c("Offense", "Defense")),
+        unit  = factor(paste(team, side), levels = unit_levels),
         short = factor(short, levels = rev(RZ_METRICS$short)),
         move  = case_when(a - b >= 1 ~ "Up", a - b <= -1 ~ "Down", TRUE ~ "Flat")
       )
@@ -340,7 +346,7 @@ build_review_page <- function(gid, tm, op, venue, pts_team, pts_opp) {
                    arrow = arrow(length = unit(0.09, "inches"), type = "closed")) +
       geom_text(aes(x = a, label = sprintf("%+d", round(a - b)), color = move,
                     hjust = if_else(a >= b, -0.35, 1.35)), size = 2.7, fontface = "bold") +
-      facet_wrap(~ unit, ncol = 1) +
+      facet_wrap(~ unit, ncol = 2) +
       scale_color_manual(values = COL_MOVE, guide = "none") +
       scale_x_continuous(limits = c(-8, 108), breaks = c(0, 25, 50, 75, 100)) +
       labs(title = "Stock Watch",
@@ -348,50 +354,59 @@ build_review_page <- function(gid, tm, op, venue, pts_team, pts_opp) {
            x = "FBS Percentile (100 = best / stingiest)", y = NULL) +
       theme_rz(base_size = 10, subtitle_size = 9) +
       theme(plot.title = element_text(size = 13), panel.grid.major.y = element_blank(),
-            strip.text = element_text(face = "bold"), axis.text.y = element_text(size = 8.5))
+            strip.text = element_text(face = "bold", size = 11), axis.text.y = element_text(size = 8.5))
   } else {
     stock <- NULL
     p_stock <- ggplot() +
-      annotate("text", x = 0, y = 0, label = "First week of the season:\nno before-and-after ratings yet", size = 4) +
+      annotate("text", x = 0, y = 0, label = "First week of the season: no before-and-after ratings yet", size = 4) +
       labs(title = "Stock Watch") +
       theme_void() + theme(plot.title = element_text(size = 13, face = "bold"))
   }
 
   ## Film-room notes ----
-  graded <- card |> filter(grade != "INC")
-  best   <- graded |> slice_max(match(grade, c("F", "D", "C", "B", "A")) * 1000 + better, n = 1, with_ties = FALSE)
-  worst  <- graded |> slice_min(match(grade, c("F", "D", "C", "B", "A")) * 1000 + better, n = 1, with_ties = FALSE)
-
-  doorstep_for <- tl |> filter(offense == tm, min_ytg <= DOORSTEP_YTG, outcome != "Touchdown")
-  doorstep_vs  <- tl |> filter(offense == op, min_ytg <= DOORSTEP_YTG, outcome != "Touchdown")
+  grade_rank <- function(g) match(g, c("F", "D", "C", "B", "A"))
+  cash_line <- function(tm, s) {
+    if (s$rz_trips == 0) return(sprintf("%s never reached the red zone, which is its own kind of report card.", tm))
+    sprintf("%s turned %d of %d red zone trip%s into touchdowns: %s points per trip, %s vs. expected per trip given where the trips started.",
+            tm, s$tds, s$rz_trips, if_else(s$rz_trips == 1, "", "s"),
+            fmt_metric(s$points, "num"), fmt_metric(s$poe, "signed"))
+  }
+  grade_line <- function(tm) {
+    g <- card |> filter(team == tm, grade != "INC")
+    if (nrow(g) == 0) return(NULL)
+    best  <- g |> slice_max(grade_rank(grade) * 1000 + better, n = 1, with_ties = FALSE)
+    worst <- g |> slice_min(grade_rank(grade) * 1000 + better, n = 1, with_ties = FALSE)
+    sprintf("%s report card: best was %s %s (%s, %s vs. norm); needs work: %s %s (%s, %s).",
+            tm, str_to_lower(best$side), best$short, best$grade, best$vs_norm,
+            str_to_lower(worst$side), worst$short, worst$grade, worst$vs_norm)
+  }
+  stopped <- function(tm) nrow(tl |> filter(offense == tm, min_ytg <= DOORSTEP_YTG, outcome != "Touchdown"))
+  n_stop <- set_names(map_int(teams, stopped), teams)
+  door_line <- if (sum(n_stop) == 0) {
+    sprintf("No trips stalled inside the %d for either team.", DOORSTEP_YTG)
+  } else {
+    sprintf("Knocking at the door (reached the %d, no TD): %s %d time%s, %s %d time%s.", DOORSTEP_YTG,
+            away, n_stop[[away]], if_else(n_stop[[away]] == 1, "", "s"),
+            home, n_stop[[home]], if_else(n_stop[[home]] == 1, "", "s"))
+  }
+  stock_line <- if (!is.null(stock)) {
+    mv <- stock |> slice_max(abs(a - b), n = 1, with_ties = FALSE)
+    if (abs(mv$a - mv$b) < 1) "Stock watch: the season ratings barely budged, which is what one game usually does."
+    else sprintf("Biggest stock move: %s %s %s, %s to %s percentile.", mv$team, str_to_lower(mv$side), mv$short,
+                 ordinal(mv$b), ordinal(mv$a))
+  }
 
   notes <- c(
-    sprintf("Cashing in: %s turned %d of %d red zone trip%s into touchdowns and scored %s points per trip (%s points vs. expected per trip, given where the trips started).",
-            tm, side_off$tds, side_off$rz_trips, if_else(side_off$rz_trips == 1, "", "s"), fmt_metric(side_off$points, "num"), fmt_metric(side_off$poe, "signed")) |>
-      (\(x) if (side_off$rz_trips == 0) sprintf("Cashing in: %s never reached the red zone, which is its own kind of report card.", tm) else x)(),
-    if (nrow(best) == 1) sprintf("Best grade: %s, %s (%s, %s vs. its norm after adjusting for %s).",
-                                 best$short, best$grade, as.character(best$unit), best$vs_norm, op),
-    if (nrow(worst) == 1 && !identical(worst$short, best$short))
-      sprintf("Needs work: %s, %s (%s, %s vs. its norm).", worst$short, worst$grade,
-              as.character(worst$unit), worst$vs_norm),
-    if (nrow(doorstep_for) + nrow(doorstep_vs) > 0)
-      sprintf("Knocking at the door (reached the %d, no TD): %s's offense %d time%s; %s's defense held %s out %d time%s.",
-              DOORSTEP_YTG, tm, nrow(doorstep_for), if_else(nrow(doorstep_for) == 1, "", "s"),
-              tm, op, nrow(doorstep_vs), if_else(nrow(doorstep_vs) == 1, "", "s"))
-    else sprintf("No trips stalled inside the %d for either team.", DOORSTEP_YTG),
-    if (!is.null(stock)) {
-      mv <- stock |> slice_max(abs(a - b), n = 1, with_ties = FALSE)
-      if (abs(mv$a - mv$b) < 1) "Stock watch: the season ratings barely budged, which is what one game usually does."
-      else sprintf("Biggest stock move: %s %s, %s to %s percentile.", tm, paste(str_to_lower(mv$unit), mv$short),
-                   ordinal(mv$b), ordinal(mv$a))
-    },
-    "One game is only a few trips, so a grade describes this game; it is not a new verdict on the team."
+    cash_line(away, side_a), cash_line(home, side_h),
+    grade_line(away), grade_line(home),
+    door_line, stock_line,
+    "One game is only a few trips, so a grade describes this game; it is not a new verdict on either team."
   )
   p_notes <- notes_panel(notes, "Film-Room Notes")
 
   ## Assemble ----
-  header / p_card / (p_trips | p_stock) / p_notes +
-    plot_layout(heights = c(1.15, 2.6, 3.4, 1.6)) +
+  header / p_card / p_trips / p_stock / p_notes +
+    plot_layout(heights = c(1.15, 4.6, 2.6, if (has_before) 3.6 else 0.6, 2.1)) +
     plot_annotation(
       caption = paste(CAP_DATA, CAP_RZ, CAP_ADJ, CAP_GRADE, CAP_RIDGE,
                       "vs. Norm: + = better than the season rating coming in (for a defense, allowed less). Rates in percentage points.",
@@ -405,9 +420,9 @@ page_files <- character(0)
 page_list  <- vector("list", nrow(pages))
 for (i in seq_len(nrow(pages))) {
   pg <- pages[i, ]
-  p  <- build_review_page(pg$game_id, pg$team, pg$opp, pg$venue, pg$pts_team, pg$pts_opp)
+  p  <- build_review_page(pg$game_id, pg$away_team, pg$home_team, pg$neutral_site, pg$away_points, pg$home_points)
   page_list[[i]] <- p
-  name <- paste0("week", REVIEW_WEEK, "_review_", slug(pg$team), "_vs_", slug(pg$opp))
+  name <- paste0("week", REVIEW_WEEK, "_review_", slug(pg$away_team), "_at_", slug(pg$home_team))
   save_plot(p, name, width = PAGE_W, height = PAGE_H)
   page_files <- c(page_files, paste0(OUT_PREFIX, name, ".png"))
 }
