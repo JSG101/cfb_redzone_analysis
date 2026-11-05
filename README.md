@@ -33,6 +33,7 @@ Results are associations, not causal claims about play-calling. Red zone samples
 | `02_01_cfb_red_zone_success.R` | Core team view: red zone points and TD rates, raw and schedule-adjusted, net rankings and outcome charts. |
 | `02_02_cfb_red_zone_extended.R` | Extended analyses: definition check, POE, reliability, shrinkage, scoring decomposition, play-level EPA, fourth downs, negative plays, optional prior-season validation. |
 | `02_03_cfb_red_zone_weekly.R` | Weekly review: latest-week POE leaders, rating movers, goal-line stands, season trends, recent form. |
+| `02_04_cfb_red_zone_preview.R` | Pre-game preview of the upcoming week: pairs each offense with the defense it faces using schedule-adjusted ratings, flags strength-vs-strength games, mismatches and intriguing games, and writes short insights. Descriptive only, not a forecast. |
 | `03_01_cfb_red_zone_report.Rmd` | The manuscript (bookdown). Reads each script's `results.rds` and saved figures. |
 
 ## Data
@@ -66,17 +67,18 @@ install.packages(c("tidyverse", "janitor", "cfbfastR", "ggpath", "glmnet", "scal
 
 ### Run order
 
-1. Open and run `02_01_cfb_red_zone_success.R`, `02_02_cfb_red_zone_extended.R`, then `02_03_cfb_red_zone_weekly.R`. Each script sources the two `00_` files itself.
+1. Open and run `02_01_cfb_red_zone_success.R`, `02_02_cfb_red_zone_extended.R`, then `02_03_cfb_red_zone_weekly.R`. Each script sources the two `00_` files itself. Midweek, run `02_04_cfb_red_zone_preview.R` for the upcoming week's matchup preview (it pulls that week's schedule once and caches it).
 2. Knit `03_01_cfb_red_zone_report.Rmd` (HTML by default). It looks for the results files in `DIR_OUTPUTS`; set the `outputs_dir` parameter to point elsewhere.
 
 Each script's Settings block at the top controls the season, weeks (`WEEKS <- NULL` means all completed weeks), red zone line, garbage-time margin and other thresholds. In `02_02`, `RUN_PRIOR_SEASON <- TRUE` adds a prior-season validation (slow the first time, since it downloads a full extra season). In `02_03`, `FOCUS_TEAMS` or `FOCUS_CONFERENCE` sets which teams are highlighted in the trend charts.
 
 ## Outputs
 
-Everything is written to `DIR_OUTPUTS`, with file names prefixed by script (`proj_012_02_01_`, `proj_012_02_02_`, `proj_012_02_03_`).
+Everything is written to `DIR_OUTPUTS`, with file names prefixed by script (`proj_012_02_01_`, `proj_012_02_02_`, `proj_012_02_03_`, `proj_012_02_04_`).
 
 - **Figures (PNG):** logo scatter plots of offense versus defense (raw and schedule-adjusted), net rankings, outcome distributions, expected points by entry point, POE, reliability, shrinkage, access versus finishing, EPA by zone, fourth-down decision charts, weekly leaders, movers, cumulative POE and recent form.
 - **CSVs:** `weekN_team_games.csv` and `weekN_goal_line_stands.csv` from the weekly review.
+- **Pre-game preview (02_04):** matchup map, must-watch games, tale of the tape and biggest mismatches for the upcoming week, plus `weekN_matchups.csv`, `weekN_games.csv` and a `weekN_insights.md` of post-ready lines.
 - **`<prefix>results.rds`:** one per analysis script, read by the report.
 - **Report:** `03_01_cfb_red_zone_report.html` (or PDF).
 
