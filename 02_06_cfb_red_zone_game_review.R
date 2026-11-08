@@ -243,11 +243,11 @@ build_review_page <- function(gid, away, home, neutral, pts_away, pts_home) {
   if (col_a == col_h) col_h <- COL_DEFAULT
   teams  <- c(away, home)
   unit_levels <- paste(rep(teams, each = 2), c("Offense", "Defense"))
-
+  
   side_of <- function(tm) week_sides |> filter(game_id == gid, offense == tm)
   side_a <- side_of(away)
   side_h <- side_of(home)
-
+  
   ## Header ----
   trip_txt <- function(tm, s) sprintf("%s %d trip%s (%d TD, %d FG, %d empty)", tm, s$rz_trips,
                                       if_else(s$rz_trips == 1, "", "s"), s$tds, s$fgs, s$empty)
@@ -257,7 +257,7 @@ build_review_page <- function(gid, away, home, neutral, pts_away, pts_home) {
     line2 = paste(wk_label, SEASON, "\u00b7 Red Zone Game Review", if (neutral %in% TRUE) "\u00b7 Neutral Site" else ""),
     line3 = paste("Inside the 20:", trip_txt(away, side_a), "\u00b7", trip_txt(home, side_h))
   )
-
+  
   ## Report card ----
   card <- bind_rows(card_rows(gid, away, home), card_rows(gid, home, away)) |>
     left_join(RZ_METRICS |> select(metric, short, unit_type = unit), by = "metric") |>
@@ -276,7 +276,7 @@ build_review_page <- function(gid, away, home, neutral, pts_away, pts_home) {
     mutate(col = factor(col, levels = c("game_val", "adj_val", "norm", "vs_norm"),
                         labels = c("Game", "Opp-Adj.", if (has_before) "Coming In" else "Season", "vs. Norm")),
            fill = if_else(col == "vs. Norm", tone, "none"))
-
+  
   p_card <- ggplot(card_cells, aes(x = col, y = short)) +
     geom_tile(aes(fill = fill), color = "white", linewidth = 1.2, width = 0.96, height = 0.9) +
     geom_text(aes(label = txt), size = 3, color = "gray10") +
@@ -298,7 +298,7 @@ build_review_page <- function(gid, away, home, neutral, pts_away, pts_home) {
     theme(plot.title = element_text(size = 13), panel.grid = element_blank(),
           strip.text = element_text(face = "bold", size = 11), axis.text.y = element_text(face = "bold", size = 9),
           axis.text.x.top = element_text(face = "bold", size = 8.5), panel.spacing.y = unit(1, "lines"))
-
+  
   ## Every trip inside the 20 ----
   tl <- trip_log |>
     filter(game_id == gid) |>
@@ -306,7 +306,7 @@ build_review_page <- function(gid, away, home, neutral, pts_away, pts_home) {
     arrange(seq) |>
     mutate(trip_no = row_number(), .by = side)
   n_max <- max(4, count(tl, side)$n)
-
+  
   p_trips <- ggplot(tl, aes(x = trip_no, y = rz_entry_ytg)) +
     geom_hline(yintercept = DOORSTEP_YTG, linetype = "dotted", color = "gray50") +
     # bar = how far the trip got (entry to its closest snap)
@@ -329,7 +329,7 @@ build_review_page <- function(gid, away, home, neutral, pts_away, pts_home) {
   if (nrow(tl) == 0) {
     p_trips <- p_trips + annotate("text", x = 2.5, y = 10, label = "No red zone trips either way", size = 4)
   }
-
+  
   ## Stock watch ----
   if (has_before) {
     stock <- bind_rows(stock_rows(away), stock_rows(home)) |>
@@ -362,7 +362,7 @@ build_review_page <- function(gid, away, home, neutral, pts_away, pts_home) {
       labs(title = "Stock Watch") +
       theme_void() + theme(plot.title = element_text(size = 13, face = "bold"))
   }
-
+  
   ## Film-room notes ----
   grade_rank <- function(g) match(g, c("F", "D", "C", "B", "A"))
   cash_line <- function(tm, s) {
@@ -395,7 +395,7 @@ build_review_page <- function(gid, away, home, neutral, pts_away, pts_home) {
     else sprintf("Biggest stock move: %s %s %s, %s to %s percentile.", mv$team, str_to_lower(mv$side), mv$short,
                  ordinal(mv$b), ordinal(mv$a))
   }
-
+  
   notes <- c(
     cash_line(away, side_a), cash_line(home, side_h),
     grade_line(away), grade_line(home),
@@ -403,7 +403,7 @@ build_review_page <- function(gid, away, home, neutral, pts_away, pts_home) {
     "One game is only a few trips, so a grade describes this game; it is not a new verdict on either team."
   )
   p_notes <- notes_panel(notes, "Film-Room Notes")
-
+  
   ## Assemble ----
   header / p_card / p_trips / p_stock / p_notes +
     plot_layout(heights = c(1.15, 4.6, 2.6, if (has_before) 3.6 else 0.6, 2.1)) +

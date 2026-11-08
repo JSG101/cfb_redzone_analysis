@@ -387,7 +387,7 @@ fit_rz_ratings <- function(drives, trips, plays, max_week = Inf, lambdas = NULL)
     fit_team_ridge(data_for[[level]], y_col, family = family, lambda = lambdas[[metric]])
   }) |>
     set_names(RZ_METRICS$metric)
-
+  
   out <- imap_dfr(fits, \(f, m) f |> select(team, adj_off, adj_def) |> mutate(metric = m))
   attr(out, "lambda") <- map(fits, \(f) attr(f, "lambda"))
   out

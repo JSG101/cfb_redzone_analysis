@@ -226,13 +226,13 @@ season_ladder <- function(tm, col) {
       # same stacking order above and below the line (no points nearest it)
       outcome_stack = factor(outcome, levels = rev(names(COL_OUTCOME)))
     )
-
+  
   ladder_games <- ladder |>
     distinct(week, opp) |>
     left_join(team_card |> select(opp = team, opp_logo = logo), by = "opp")
   y_max <- max(5, ladder |> filter(side == "For") |> summarise(t = sum(n), .by = week) |> pull(t))
   y_min <- min(-5, -(ladder |> filter(side == "Against") |> summarise(t = sum(n), .by = week) |> pull(t)))
-
+  
   p <- ggplot(ladder, aes(x = week, y = n_signed, fill = outcome)) +
     annotate("rect", xmin = -Inf, xmax = Inf, ymin = 0, ymax = Inf, fill = col, alpha = 0.06) +
     geom_col(aes(group = outcome_stack), width = 0.7, position = position_stack(reverse = TRUE),
@@ -269,10 +269,10 @@ build_preview_page <- function(away, home, neutral, game_label) {
   col_a  <- card_a$color
   col_h  <- card_h$color
   if (col_a == col_h) col_h <- COL_DEFAULT   # keep the two sides apart when colors match
-
+  
   m_a <- team_metric |> filter(team == away)
   m_h <- team_metric |> filter(team == home)
-
+  
   ## Header ----
   thin_a <- card_a$trips_off < MIN_TRIPS | card_a$trips_def < MIN_TRIPS
   thin_h <- card_h$trips_off < MIN_TRIPS | card_h$trips_def < MIN_TRIPS
@@ -284,7 +284,7 @@ build_preview_page <- function(away, home, neutral, game_label) {
                     max(weeks_played), away, card_a$trips_off, card_a$trips_def,
                     home, card_h$trips_off, card_h$trips_def)
   )
-
+  
   ## Butterflies (away always on the left) ----
   side_a <- m_a |>
     select(metric, short, unit, left_pct = off_pct, left_val = adj_off) |>
@@ -296,18 +296,18 @@ build_preview_page <- function(away, home, neutral, game_label) {
     inner_join(m_h |> select(metric, right_pct = off_pct, right_val = adj_off), by = "metric") |>
     mutate(left_lab  = paste0(fmt_metric(left_val, unit), " \u00b7 ", ordinal(left_pct)),
            right_lab = paste0(ordinal(right_pct), " \u00b7 ", fmt_metric(right_val, unit)))
-
+  
   bf_a <- butterfly(side_a, paste("When", away, "Has the Ball"),
                     paste0(away, " offense vs. ", home, " defense (value \u00b7 FBS percentile)"),
                     col_a, col_h, paste(away, "O"), paste(home, "D"))
   bf_h <- butterfly(side_h, paste("When", home, "Has the Ball"),
                     paste0(away, " defense (allowed) vs. ", home, " offense"),
                     col_a, col_h, paste(away, "D"), paste(home, "O"))
-
+  
   ## Season ladders ----
   p_ladder_a <- season_ladder(away, col_a)
   p_ladder_h <- season_ladder(home, col_h) + theme(legend.position = "none")
-
+  
   ## Scouting notes ----
   pct_of <- function(m, tm_metric, col) tm_metric[[col]][tm_metric$metric == m]
   identity_line <- function(tm, mm) {
@@ -317,11 +317,11 @@ build_preview_page <- function(away, home, neutral, game_label) {
             tm, identity_tag(pct_of("access", mm, "def_pct"), pct_of("points", mm, "def_pct"), IDENTITY_DEF),
             ordinal(pct_of("access", mm, "def_pct")), ordinal(pct_of("points", mm, "def_pct")))
   }
-
+  
   # gap > 0 = the away unit rates higher; < 0 = the home unit does
   gaps <- bind_rows(side_a |> mutate(side = "a"), side_h |> mutate(side = "h")) |>
     mutate(gap = left_pct - right_pct)
-
+  
   edge_line <- function(row, for_away) {
     tm <- if (for_away) away else home
     if (nrow(row) == 0 || abs(row$gap) < EDGE_GAP) {
@@ -334,7 +334,7 @@ build_preview_page <- function(away, home, neutral, game_label) {
             tm, unit_a, ordinal(row$left_pct), unit_h, ordinal(row$right_pct), row$short,
             if (for_away) unit_a else unit_h, round(abs(row$gap)))
   }
-
+  
   notes <- c(
     identity_line(away, m_a),
     identity_line(home, m_h),
@@ -349,7 +349,7 @@ build_preview_page <- function(away, home, neutral, game_label) {
     }
   )
   p_notes <- notes_panel(notes, "Scouting Notes")
-
+  
   ## Assemble ----
   header / (bf_a | bf_h) / p_ladder_a / p_ladder_h / p_notes +
     plot_layout(heights = c(1.15, 3.1, 2.7, 2.5, 1.7)) +
