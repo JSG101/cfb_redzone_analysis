@@ -33,6 +33,8 @@ Results are associations, not causal claims about play-calling. Red zone samples
 | `02_01_cfb_red_zone_success.R` | Core team view: red zone points and TD rates, raw and schedule-adjusted, net rankings and outcome charts. |
 | `02_02_cfb_red_zone_extended.R` | Extended analyses: definition check, POE, reliability, shrinkage, scoring decomposition, play-level EPA, fourth downs, negative plays, optional prior-season validation. |
 | `02_03_cfb_red_zone_weekly.R` | Weekly review: latest-week POE leaders, rating movers, goal-line stands, season trends, recent form. |
+| `02_05_cfb_red_zone_game_preview.R` | Pre-game page per game (games with a P5 team): both teams' opponent-adjusted offense vs. defense on six red zone measures, season ladders, scouting notes. Descriptive, not a forecast. |
+| `02_06_cfb_red_zone_game_review.R` | Post-game page per game: report card for both offenses and defenses with opponent-adjusted game values and letter grades, every trip inside the 20, before/after rating moves. |
 | `03_01_cfb_red_zone_report.Rmd` | The manuscript (bookdown). Reads each script's `results.rds` and saved figures. |
 
 ## Data
@@ -73,7 +75,7 @@ Each script's Settings block at the top controls the season, weeks (`WEEKS <- NU
 
 ## Outputs
 
-Everything is written to `DIR_OUTPUTS`, with file names prefixed by script (`proj_012_02_01_`, `proj_012_02_02_`, `proj_012_02_03_`).
+Everything is written to `DIR_OUTPUTS`, with file names prefixed by script (`proj_012_02_01_`, `proj_012_02_02_`, `proj_012_02_03_`, and so on). `02_05` and `02_06` write one PNG per page plus a combined PDF for the week.
 
 - **Figures (PNG):** logo scatter plots of offense versus defense (raw and schedule-adjusted), net rankings, outcome distributions, expected points by entry point, POE, reliability, shrinkage, access versus finishing, EPA by zone, fourth-down decision charts, weekly leaders, movers, cumulative POE and recent form.
 - **CSVs:** `weekN_team_games.csv` and `weekN_goal_line_stands.csv` from the weekly review.
