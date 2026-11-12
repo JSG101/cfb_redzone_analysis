@@ -41,7 +41,7 @@ source("00_01_cfb_functions.R")
 
 # Settings ----
 SEASON           <- 2026
-WEEKS            <- NULL         # NULL = all completed weeks; or e.g. 1:8
+WEEKS            <- 1:10         # NULL = all completed weeks; or e.g. 1:8
 REFRESH_WEEKS    <- integer(0)   # weeks to re-pull from the API (e.g., the latest week after corrections)
 LATEST_WEEK      <- NULL         # NULL = most recent week in the data
 RZ_LINE          <- 20

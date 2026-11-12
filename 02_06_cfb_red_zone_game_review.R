@@ -53,7 +53,7 @@ library(patchwork)
 # Settings ----
 SEASON         <- 2026
 SEASON_TYPE    <- "regular"
-WEEKS          <- NULL         # NULL = all completed weeks; or e.g. 1:9
+WEEKS          <- 1:10         # NULL = all completed weeks; or e.g. 1:9
 REFRESH_WEEKS  <- integer(0)   # weeks to re-pull from the API (e.g., the review week after corrections)
 REVIEW_WEEK    <- NULL         # NULL = the most recent week in the data
 RZ_LINE        <- 20

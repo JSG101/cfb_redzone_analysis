@@ -43,7 +43,7 @@ source("00_01_cfb_functions.R")
 # Settings ----
 SEASON           <- 2026
 PRIOR_SEASON     <- 2025
-WEEKS            <- NULL         # NULL = all completed weeks; or e.g. 1:7
+WEEKS            <- 1:10        # NULL = all completed weeks; or e.g. 1:7
 REFRESH_WEEKS    <- integer(0)   # weeks to re-pull from the API, e.g. 7
 RZ_LINE          <- 20
 GARBAGE_MARGIN   <- 28           # 2nd-half drives starting with |score diff| > this are excluded

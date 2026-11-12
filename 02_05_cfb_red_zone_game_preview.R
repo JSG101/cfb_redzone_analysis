@@ -50,7 +50,7 @@ library(patchwork)
 # Settings ----
 SEASON           <- 2026
 SEASON_TYPE      <- "regular"
-WEEKS            <- NULL         # ratings data: NULL = all completed weeks; or e.g. 1:9
+WEEKS            <- 1:10         # ratings data: NULL = all completed weeks; or e.g. 1:9
 REFRESH_WEEKS    <- integer(0)   # weeks to re-pull from the API
 PREVIEW_WEEK     <- NULL         # NULL = the week after the latest completed week
 REFRESH_SCHEDULE <- FALSE        # TRUE = re-pull the preview week's schedule
