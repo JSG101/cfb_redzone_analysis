@@ -23,6 +23,7 @@ DIR_OUTPUTS <- file.path("C:/Users/japbi/Dropbox/Data Science/00_outputs")
 DIR_INPUTS <- file.path("C:/Users/japbi/Dropbox/Data Science/00_inputs")
 
 # Formatting and Global Options ----
+CFB_BUFFER_HOURS <- 24   # hours after a week's last kickoff before that week is loaded; lower it to pull a week sooner
 conferences_p5 <- c("ACC", "Big 12", "Big Ten", "FBS Independents", "Pac-12", "SEC")
 watermark_path <- data.frame(
   x = 4, y = 4, 

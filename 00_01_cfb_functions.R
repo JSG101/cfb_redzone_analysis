@@ -74,17 +74,36 @@ cfbd_cached_week <- function(kind, season, wk, fetch, season_type = "regular", o
 }
 
 ## Weeks whose games are all finished ----
-# The calendar is cached once per season (one API call the first time).
-completed_weeks <- function(season, season_type = "regular", buffer_hours = 24) {
+# A week counts as completed once its last kickoff is more than buffer_hours
+# old. The buffer exists so a week is not cached while CFBD is still loading
+# late games; partial weeks would otherwise stick in the cache. Lower
+# CFB_BUFFER_HOURS (here or in 00_00) to pull a week sooner, e.g. Sunday
+# morning, then re-pull it later with REFRESH_WEEKS to pick up corrections.
+# The calendar is cached and re-pulled when older than calendar_max_age_days,
+# so schedule changes (moved or added games) are picked up.
+CFB_BUFFER_HOURS <- if (exists("CFB_BUFFER_HOURS")) CFB_BUFFER_HOURS else 24
+
+completed_weeks <- function(season, season_type = "regular", buffer_hours = CFB_BUFFER_HOURS,
+                            calendar_max_age_days = 7) {
   dir  <- file.path(CFB_CACHE_DIR, "calendar")
   path <- file.path(dir, sprintf("calendar_%d.rds", season))
   dir.create(dir, showWarnings = FALSE, recursive = TRUE)
   
-  if (file.exists(path)) {
-    cal <- readRDS(path)
+  stale <- !file.exists(path) ||
+    difftime(Sys.time(), file.mtime(path), units = "days") > calendar_max_age_days
+  if (stale) {
+    message(sprintf("Querying API: calendar, %d", season))
+    cal <- tryCatch(as_tibble(cfbd_calendar(season)), error = function(e) NULL)
+    if (!is.null(cal) && nrow(cal) > 0) {
+      saveRDS(cal, path)
+    } else if (file.exists(path)) {
+      warning("Calendar refresh failed; using the cached copy.", call. = FALSE)
+      cal <- readRDS(path)
+    } else {
+      stop("Could not download the ", season, " calendar.", call. = FALSE)
+    }
   } else {
-    cal <- as_tibble(cfbd_calendar(season))
-    saveRDS(cal, path)
+    cal <- readRDS(path)
   }
   check_cols(cal, c("week", "season_type", "last_game_start"), "calendar")
   
@@ -94,11 +113,21 @@ completed_weeks <- function(season, season_type = "regular", buffer_hours = 24) 
     lubridate::ymd_hms(cal$last_game_start, quiet = TRUE)
   }
   
-  cal |>
-    mutate(last_end = last_end) |>
-    filter(season_type == !!season_type, last_end < Sys.time() - buffer_hours * 3600) |>
-    pull(week) |>
-    sort()
+  cal <- cal |>
+    mutate(last_end = last_end, ready_at = last_end + buffer_hours * 3600) |>
+    filter(season_type == !!season_type)
+  done <- cal |> filter(ready_at < Sys.time())
+  
+  # Say which week is held back and when it will load, so a missing week is not a mystery
+  nxt <- cal |> filter(ready_at >= Sys.time()) |> slice_min(week, n = 1, with_ties = FALSE)
+  if (nrow(nxt) == 1) {
+    message(sprintf(paste0("Week %d not loaded yet: its last game kicked off %s, and weeks load %g hours after that ",
+                           "(from %s). Set CFB_BUFFER_HOURS lower, or WEEKS explicitly, to pull it sooner."),
+                    nxt$week, format(nxt$last_end, "%a %b %d %H:%M %Z", tz = ""), buffer_hours,
+                    format(nxt$ready_at, "%a %b %d %H:%M %Z", tz = "")))
+  }
+  
+  sort(done$week)
 }
 
 ## Drives, play-by-play, and game info for a season ----
