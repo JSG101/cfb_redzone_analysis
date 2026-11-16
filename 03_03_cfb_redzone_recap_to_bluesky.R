@@ -45,7 +45,8 @@ format_team <- function(x) {
 # Datasets ----
 
 files_list <- list.files(path = DIR_OUTPUTS, full.names = TRUE)
-files_filtered <- files_list[grepl("week10_review.*\\.png$", files_list)]
+files_filtered <- files_list[grepl("week11_review.*\\.png$", files_list)]
+files_filtered
 
 # Processing ----
 
